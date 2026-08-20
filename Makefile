@@ -16,9 +16,23 @@ help: ## Display this help
 
 ##@ Development
 
+# Version information
+GIT_SHA ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+GIT_DIRTY ?= $(shell [ -z "$$(git status --porcelain 2>/dev/null)" ] || echo "-modified")
+APP_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "0.0.0-dev")
+BUILD_DATE ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+# Go build flags
+GOFLAGS ?= -trimpath
+#  TODO: add more LDFlags
+LDFLAGS := -s -w
+CGO_ENABLED ?= 1
+GOEXPERIMENT ?= boringcrypto
+
 .PHONY: build
-build: ## Build all packages
-	$(GO) build ./...
+build: ## Build the hyperfleet-applier binary
+	@echo "Building version: ${APP_VERSION}"
+	CGO_ENABLED=$(CGO_ENABLED) GOEXPERIMENT=$(GOEXPERIMENT) ${GO} build $(GOFLAGS) -ldflags="$(LDFLAGS)" -o bin/applier ./cmd/applier
 
 .PHONY: test
 test: ## Run unit tests
@@ -61,7 +75,7 @@ lint: ## Run golangci-lint
 	$(call gotool,golangci-lint) run
 
 .PHONY: verify
-verify: fmt-check vet ## Run all verification checks
+verify: fmt-check vet helm-verify ## Run all verification checks
 
 .PHONY: lint-check
 lint-check: fmt-check vet ## Run static code analysis (alias for verify, follows architecture naming)
@@ -83,3 +97,122 @@ verify-tools: tools ## Fail in CI if tool module drifted
 .PHONY: download
 download: ## Download dependencies
 	$(GO) mod download
+
+
+##@ Container Images
+
+# =============================================================================
+# Image Configuration
+# =============================================================================
+IMAGE_REGISTRY ?= quay.io/openshift-hyperfleet
+IMAGE_NAME ?= hyperfleet-applier
+IMAGE_TAG ?= $(APP_VERSION)
+IMG ?= $(IMAGE_REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
+
+PLATFORM ?= linux/amd64
+
+# Dev image configuration - set QUAY_USER to push to personal registry
+# Usage: QUAY_USER=myuser make image-dev
+QUAY_USER ?=
+DEV_TAG ?= dev-$(GIT_SHA)
+DEV_BASE_IMAGE ?= registry.access.redhat.com/ubi9/ubi-minimal:latest
+BASE_IMAGE ?= registry.access.redhat.com/ubi9-micro:latest
+# Auto-detect container tool (podman preferred when available)
+CONTAINER_TOOL ?= $(shell command -v podman 2>/dev/null || command -v docker 2>/dev/null)
+
+.PHONY: check-container-tool
+check-container-tool:
+ifndef CONTAINER_TOOL
+	@echo "Error: No container tool found (podman or docker)"
+	@echo ""
+	@echo "Please install one of:"
+	@echo "  brew install podman   # macOS"
+	@echo "  brew install docker   # macOS"
+	@echo "  dnf install podman    # Fedora/RHEL"
+	@exit 1
+endif
+
+# Build container image (multi-stage build, no local binary needed)
+.PHONY: image-build
+image: check-container-tool ## Build container image with configurable registry/tag
+	@echo "Building container image $(IMG)..."
+	$(CONTAINER_TOOL) build \
+		--platform $(PLATFORM) \
+		--build-arg BASE_IMAGE=$(BASE_IMAGE) \
+		--build-arg APP_VERSION=$(APP_VERSION) \
+		-t $(IMG) .
+	@echo "Image built: $(IMG)"
+	@echo "$(IMG)"
+
+.PHONY: image-push
+image-push: check-container-tool ## Push container image to registry
+	@echo "Pushing image $(IMG)..."
+	$(CONTAINER_TOOL) push $(IMG)
+	@echo "Image pushed: $(IMG)"
+
+
+.PHONY: image-dev
+image-dev: ## Build and push dev image to dev Quay registry (requires QUAY_USER)
+ifeq ($(strip $(QUAY_USER)),)
+	@echo "Error: QUAY_USER is not set"
+	@echo ""
+	@echo "Usage: QUAY_USER=myuser make image-dev"
+	@exit 1
+endif
+	IMG_REGISTRY=quay.io/$(QUAY_USER) IMG_TAG=$(DEV_TAG) BASE_IMAGE=$(DEV_BASE_IMAGE) $(MAKE) image image-push
+
+##@ Helm
+
+HELM ?= helm
+CHART_DIR := charts
+CHART_VALUES_FILE := charts/values.yaml
+
+# Test values for helm template rendering
+HELM_TEST_VALUES := \
+	--set image.registry=quay.io \
+	--set image.repository=openshift-hyperfleet/hyperfleet-applier \
+	--set image.tag=test \
+	--set applier.managementCluster=test-cluster \
+	--set applier.pollInterval=5s \
+	--set redis.address=redis:6379
+
+.PHONY: helm-lint
+helm-lint: ## Lint the Helm chart
+	@echo "Linting Helm chart..."
+	$(HELM) lint $(CHART_DIR)
+
+.PHONY: helm-template
+helm-template: ## Render Helm chart templates with test values
+	@echo "Rendering Helm chart templates..."
+	$(HELM) template hyperfleet-applier $(CHART_DIR) $(HELM_TEST_VALUES)
+
+.PHONY: helm-template-check
+helm-template-check: ## Verify Helm chart templates can be rendered
+	@echo "Verifying Helm chart templates can be rendered..."
+	@$(HELM) template hyperfleet-applier $(CHART_DIR) $(HELM_TEST_VALUES) > /dev/null
+	@echo "✓ Helm chart templates rendered successfully"
+
+.PHONY: helm-verify
+helm-verify: helm-lint helm-template-check ## Run all Helm chart verification checks
+	@echo "✓ All Helm chart checks passed"
+
+.PHONY: helm-docs
+helm-docs: ## Generate Helm chart README from values.yaml annotations
+	$(call gotool,helm-docs) --chart-search-root=charts --sort-values-order=file
+
+.PHONY: verify-helm-docs
+verify-helm-docs: ## Verify chart README is up to date
+	$(call gotool,helm-docs) --chart-search-root=charts --sort-values-order=file
+	@git diff --exit-code charts/README.md > /dev/null 2>&1 || \
+		(echo "ERROR: charts/README.md is out of date. Run 'make helm-docs' and commit the result." && exit 1)
+
+.PHONY: helm-install
+helm-install: ## Install the Helm chart 
+	helm upgrade --install hyperfleet-applier $(CHART_DIR) \
+	-f $(CHART_DIR)/values.yaml \
+	--set image.registry=$(IMAGE_REGISTRY) \
+	--set image.repository=$(IMAGE_NAME) \
+	--set image.tag=$(IMAGE_TAG) \
+	--set applier.managementCluster=$(MANAGEMENT_CLUSTER) \
+	--set applier.pollInterval=$(POLL_INTERVAL) \
+	--set redis.address=$(REDIS_ADDRESS)
