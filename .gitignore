@@ -44,3 +44,4 @@ Thumbs.db
 dist/
 build/
 secrets/
+bin/

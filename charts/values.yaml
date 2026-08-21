@@ -1,0 +1,88 @@
+# Default values for hyperfleet-applier.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# -- List of image pull secrets to use for pulling container images
+imagePullSecrets: []
+# -- Override the chart name
+nameOverride: ""
+# -- Override the full release name
+fullnameOverride: ""
+
+# Service account configuration - controller needs API access
+serviceAccount:
+  # -- Create a service account for the controller
+  create: true
+  # -- Annotations to add to the service account
+  annotations: {}
+  # -- Override the service account name
+  name: ""
+
+# RBAC configuration for the controller
+rbac:
+  # -- Create RBAC resources (ClusterRole, ClusterRoleBinding)
+  create: true
+  # -- ClusterRole rules - the controller needs broad permissions to apply any resource type
+  # WARNING: These broad permissions allow the applier to manage any Kubernetes resource.
+  # Future change to reduce the permissions
+  rules:
+    - apiGroups: ["*"]
+      resources: ["*"]
+      verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+# -- Annotations to add to controller pods
+podAnnotations: {}
+
+# -- Labels to add to controller pods
+podLabels: {}
+
+# -- Pod-level security context
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+# -- Container-level security context
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+    - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+
+# -- Resource requests and limits for the controller container
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+# -- Number of controller replicas to run
+replicaCount: 1
+
+# Container image configuration
+image:
+  # -- Container image registry (required)
+  registry: ""
+  # -- Container image repository (required)
+  repository: ""
+  # -- Container image tag (required)
+  tag: ""
+  # -- Image pull policy
+  pullPolicy: IfNotPresent
+
+# Applier configuration
+applier:
+  # -- Management cluster identifier - must match the partition this applier instance manages (required)
+  managementCluster: ""
+  # -- Polling interval for reconciliation loops (e.g., "5s", "1m") (required)
+  pollInterval: ""
+
+# Redis store configuration (required - applier will fail to start without Redis)
+redis:
+  # -- Redis server address in format "host:port" (required)
+  address: ""
+

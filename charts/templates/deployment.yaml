@@ -1,0 +1,50 @@
+{{- include "hyperfleet-applier.validateValues" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hyperfleet-applier.fullname" . }}
+  labels:
+    {{- include "hyperfleet-applier.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "hyperfleet-applier.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "hyperfleet-applier.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "hyperfleet-applier.serviceAccountName" . }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: hyperfleet-applier
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          image: {{ include "hyperfleet-applier.fullImageName" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: REDIS_ADDRESS
+              value: {{ .Values.redis.address | quote }}
+            - name: POLL_INTERVAL
+              value: {{ .Values.applier.pollInterval | quote }}
+            - name: MANAGEMENT_CLUSTER
+              value: {{ .Values.applier.managementCluster | quote }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
