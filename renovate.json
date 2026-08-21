@@ -1,41 +1,40 @@
 {
-    "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-    "schedule": [
-      "on monday"
-    ],
-    "gomod": {
-      "packageRules": [
-        {
-          "matchUpdateTypes": [
-            "digest"
-          ],
-          "enabled": false
-        },
-        {
-          "matchDepTypes": [
-            "indirect"
-          ],
-          "enabled": false
-        }
-      ]
-    },
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "schedule": [
+    "on monday"
+  ],
+  "gomod": {
     "packageRules": [
       {
-        "matchManagers": [
-          "gomod"
-        ],
         "matchUpdateTypes": [
-          "minor",
-          "patch"
+          "digest"
         ],
-        "groupName": "go module minor/patch updates"
+        "enabled": false
       },
       {
-        "matchManagers": [
-          "dockerfile"
+        "matchDepTypes": [
+          "indirect"
         ],
-        "groupName": "docker image updates"
+        "enabled": false
       }
     ]
-  }
-  
+  },
+  "packageRules": [
+    {
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "groupName": "go module minor/patch updates"
+    },
+    {
+      "matchManagers": [
+        "dockerfile"
+      ],
+      "groupName": "docker image updates"
+    }
+  ]
+}

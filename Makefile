@@ -32,7 +32,7 @@ GOEXPERIMENT ?= boringcrypto
 .PHONY: build
 build: ## Build the hyperfleet-applier binary
 	@echo "Building version: ${APP_VERSION}"
-	CGO_ENABLED=$(CGO_ENABLED) GOEXPERIMENT=$(GOEXPERIMENT) ${GO} build $(GOFLAGS) -ldflags="$(LDFLAGS)" -o bin/applier ./cmd/applier
+	CGO_ENABLED=$(CGO_ENABLED) GOEXPERIMENT=$(GOEXPERIMENT) $(GO) build $(GOFLAGS) -ldflags="$(LDFLAGS)" -o bin/applier ./cmd/applier
 
 .PHONY: test
 test: ## Run unit tests
@@ -133,7 +133,7 @@ ifndef CONTAINER_TOOL
 endif
 
 # Build container image (multi-stage build, no local binary needed)
-.PHONY: image-build
+.PHONY: image
 image: check-container-tool ## Build container image with configurable registry/tag
 	@echo "Building container image $(IMG)..."
 	$(CONTAINER_TOOL) build \
@@ -159,7 +159,7 @@ ifeq ($(strip $(QUAY_USER)),)
 	@echo "Usage: QUAY_USER=myuser make image-dev"
 	@exit 1
 endif
-	IMG_REGISTRY=quay.io/$(QUAY_USER) IMG_TAG=$(DEV_TAG) BASE_IMAGE=$(DEV_BASE_IMAGE) $(MAKE) image image-push
+	IMAGE_REGISTRY=quay.io/$(QUAY_USER) IMAGE_TAG=$(DEV_TAG) BASE_IMAGE=$(DEV_BASE_IMAGE) $(MAKE) image image-push
 
 ##@ Helm
 
@@ -206,13 +206,3 @@ verify-helm-docs: ## Verify chart README is up to date
 	@git diff --exit-code charts/README.md > /dev/null 2>&1 || \
 		(echo "ERROR: charts/README.md is out of date. Run 'make helm-docs' and commit the result." && exit 1)
 
-.PHONY: helm-install
-helm-install: ## Install the Helm chart 
-	helm upgrade --install hyperfleet-applier $(CHART_DIR) \
-	-f $(CHART_DIR)/values.yaml \
-	--set image.registry=$(IMAGE_REGISTRY) \
-	--set image.repository=$(IMAGE_NAME) \
-	--set image.tag=$(IMAGE_TAG) \
-	--set applier.managementCluster=$(MANAGEMENT_CLUSTER) \
-	--set applier.pollInterval=$(POLL_INTERVAL) \
-	--set redis.address=$(REDIS_ADDRESS)

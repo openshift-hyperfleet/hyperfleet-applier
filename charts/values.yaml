@@ -13,8 +13,6 @@ fullnameOverride: ""
 serviceAccount:
   # -- Create a service account for the controller
   create: true
-  # -- Automatically mount service account token
-  automount: true
   # -- Annotations to add to the service account
   annotations: {}
   # -- Override the service account name
@@ -25,16 +23,12 @@ rbac:
   # -- Create RBAC resources (ClusterRole, ClusterRoleBinding)
   create: true
   # -- ClusterRole rules - the controller needs broad permissions to apply any resource type
+  # WARNING: These broad permissions allow the applier to manage any Kubernetes resource.
+  # Future change to reduce the permissions
   rules:
-    - apiGroups: [""]
-      resources: ["configmaps", "secrets", "services", "serviceaccounts"]
+    - apiGroups: ["*"]
+      resources: ["*"]
       verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-    - apiGroups: ["apps"]
-      resources: ["deployments", "statefulsets", "daemonsets"]
-      verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-    - apiGroups: [""]
-      resources: ["events"]
-      verbs: ["create", "patch"]
 
 # -- Annotations to add to controller pods
 podAnnotations: {}
@@ -87,10 +81,8 @@ applier:
   # -- Polling interval for reconciliation loops (e.g., "5s", "1m") (required)
   pollInterval: ""
 
-# Redis store configuration (required - controller will fail to start without Redis)
+# Redis store configuration (required - applier will fail to start without Redis)
 redis:
-  # -- Enable Redis store configuration
-  enabled: true
   # -- Redis server address in format "host:port" (required)
   address: ""
 

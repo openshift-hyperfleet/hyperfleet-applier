@@ -40,10 +40,8 @@ spec:
           image: {{ include "hyperfleet-applier.fullImageName" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
-            {{- if .Values.redis.enabled }}
             - name: REDIS_ADDRESS
               value: {{ .Values.redis.address | quote }}
-            {{- end }}
             - name: POLL_INTERVAL
               value: {{ .Values.applier.pollInterval | quote }}
             - name: MANAGEMENT_CLUSTER

@@ -86,5 +86,8 @@ Validate required values
 {{- if not .Values.applier.pollInterval }}
 {{- fail "applier.pollInterval is required" }}
 {{- end }}
+{{- if not .Values.redis.address }}
+{{- fail "redis.address is required" }}
+{{- end }}
 {{- end }}
 

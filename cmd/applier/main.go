@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -26,7 +27,7 @@ import (
 )
 
 // TODO: HYPERFLEET-1521 - parallel reconciler execution
-// Currently main is temporary entry point
+// Currently main is temporary entry point - break it into smaller functions
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
@@ -65,9 +66,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	redisClient := verifyRedisClient(redisAddr)
-	if redisClient == nil {
-		slog.Error("failed to connect to redis")
+	redisClient, err := verifyRedisClient(redisAddr)
+	if err != nil {
+		slog.Error("failed to connect to redis", "error", err)
 		os.Exit(1)
 	}
 
@@ -164,7 +165,7 @@ func getKubeConfig() (*rest.Config, error) {
 	return kubeConfig.ClientConfig()
 }
 
-func verifyRedisClient(redisAddr string) *redis.Client {
+func verifyRedisClient(redisAddr string) (*redis.Client, error) {
 	// Create Redis client
 	redisClient := redis.NewClient(&redis.Options{
 		Addr: redisAddr,
@@ -175,10 +176,13 @@ func verifyRedisClient(redisAddr string) *redis.Client {
 	defer cancel()
 
 	if pingErr := redisClient.Ping(ctx).Err(); pingErr != nil {
-		slog.Error("failed to ping redis", "error", pingErr)
-		return nil
+		// Close the client to avoid resource leak
+		if closeErr := redisClient.Close(); closeErr != nil {
+			slog.Error("failed to close redis client", "error", closeErr)
+		}
+		return nil, fmt.Errorf("failed to ping redis: %w", pingErr)
 	}
 
 	slog.Info("connected to redis")
-	return redisClient
+	return redisClient, nil
 }
