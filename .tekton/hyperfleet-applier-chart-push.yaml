@@ -1,12 +1,10 @@
-# Helm chart OCI build pipeline (HYPERFLEET-1207).
-#
 # Hand-authored because Konflux's configure-pac generator only emits container
 # build pipelines; there is no generated Helm chart build. This references the
 # build-helm-chart-oci-ta task directly, modeled on konflux-ci/caching's
 # .tekton/squid-helm-push.yaml.
 #
-# IMAGE_MAPPINGS is intentionally omitted for the build spike: the chart packages
-# with its values.yaml defaults as-is. Pinning the chart's image references to the
+# IMAGE_MAPPINGS is intentionally omitted: the chart packages with its
+# values.yaml defaults as-is. Pinning the chart's image references to the
 # Konflux-built image is deferred to the chart values / release work.
 apiVersion: tekton.dev/v1
 kind: PipelineRun

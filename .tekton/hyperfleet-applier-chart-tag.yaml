@@ -1,5 +1,3 @@
-# Helm chart OCI build pipeline — tag trigger (HYPERFLEET-1214).
-#
 # Builds a versioned chart when a semver tag is pushed (v1.0.0 or v1.0.0-rc1).
 # Extracts the version from the git tag and passes it as CHART_VERSION and
 # APP_VERSION so the published chart carries the release version instead of the
