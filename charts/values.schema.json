@@ -1,0 +1,366 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "applier": {
+      "additionalProperties": false,
+      "description": "Applier configuration",
+      "properties": {
+        "managementCluster": {
+          "default": "",
+          "description": "Management cluster identifier - must match the partition this applier instance manages (required)",
+          "title": "managementCluster",
+          "type": "string"
+        },
+        "pollInterval": {
+          "default": "",
+          "description": "Polling interval for reconciliation loops (e.g., \"5s\", \"1m\") (required)",
+          "title": "pollInterval",
+          "type": "string"
+        }
+      },
+      "required": [
+        "managementCluster",
+        "pollInterval"
+      ],
+      "title": "applier",
+      "type": "object"
+    },
+    "fullnameOverride": {
+      "default": "",
+      "description": "Override the full release name",
+      "title": "fullnameOverride",
+      "type": "string"
+    },
+    "global": {
+      "description": "Global values are values that can be accessed from any chart or subchart by exactly the same name.",
+      "required": [],
+      "title": "global",
+      "type": "object"
+    },
+    "image": {
+      "additionalProperties": false,
+      "description": "Container image configuration",
+      "properties": {
+        "pullPolicy": {
+          "default": "IfNotPresent",
+          "description": "Image pull policy",
+          "title": "pullPolicy",
+          "type": "string"
+        },
+        "registry": {
+          "default": "",
+          "description": "Container image registry (required)",
+          "title": "registry",
+          "type": "string"
+        },
+        "repository": {
+          "default": "",
+          "description": "Container image repository (required)",
+          "title": "repository",
+          "type": "string"
+        },
+        "tag": {
+          "default": "",
+          "description": "Container image tag (required)",
+          "title": "tag",
+          "type": "string"
+        }
+      },
+      "required": [
+        "registry",
+        "repository",
+        "tag",
+        "pullPolicy"
+      ],
+      "title": "image",
+      "type": "object"
+    },
+    "imagePullSecrets": {
+      "description": "List of image pull secrets to use for pulling container images",
+      "items": {
+        "required": []
+      },
+      "title": "imagePullSecrets",
+      "type": "array"
+    },
+    "nameOverride": {
+      "default": "",
+      "description": "Override the chart name",
+      "title": "nameOverride",
+      "type": "string"
+    },
+    "podAnnotations": {
+      "additionalProperties": { "type": "string" },
+      "description": "Annotations to add to controller pods",
+      "required": [],
+      "title": "podAnnotations",
+      "type": "object"
+    },
+    "podLabels": {
+      "additionalProperties": { "type": "string" },
+      "description": "Labels to add to controller pods",
+      "required": [],
+      "title": "podLabels",
+      "type": "object"
+    },
+    "podSecurityContext": {
+      "additionalProperties": false,
+      "description": "Pod-level security context",
+      "properties": {
+        "runAsNonRoot": {
+          "default": true,
+          "title": "runAsNonRoot",
+          "type": "boolean"
+        },
+        "seccompProfile": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "default": "RuntimeDefault",
+              "title": "type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "seccompProfile",
+          "type": "object"
+        }
+      },
+      "required": [
+        "runAsNonRoot",
+        "seccompProfile"
+      ],
+      "title": "podSecurityContext",
+      "type": "object"
+    },
+    "rbac": {
+      "additionalProperties": false,
+      "description": "RBAC configuration for the controller",
+      "properties": {
+        "allowlist": {
+          "description": "Explicit allowlist of API group + resource pairs the applier's ServiceAccount may manage on this cluster. Each entry must specify apiGroups and resources; verbs are added automatically by the template. Do NOT add a \"*\" apiGroup or resource here -- see rbac.devModeWildcard for the (off-by-default) escape hatch.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "apiGroups": {
+                "type": "array",
+                "items": { "type": "string" },
+                "minItems": 1,
+                "description": "API groups to allow (e.g. [\"\"] for core, [\"apps\"]). Wildcards (\"*\") are not permitted."
+              },
+              "resources": {
+                "type": "array",
+                "items": { "type": "string" },
+                "minItems": 1,
+                "description": "Resource types to allow (e.g. [\"deployments\", \"replicasets\"]). Wildcards (\"*\") are not permitted."
+              }
+            },
+            "required": ["apiGroups", "resources"]
+          },
+          "title": "allowlist",
+          "type": "array"
+        },
+        "create": {
+          "default": true,
+          "description": "Create RBAC resources (ClusterRole, ClusterRoleBinding)",
+          "title": "create",
+          "type": "boolean"
+        },
+        "devModeWildcard": {
+          "default": false,
+          "description": "DANGER: replaces rbac.allowlist with a cluster-wide \"*\"/\"*\" ClusterRole rule when\ntrue. This disables the allowlist entirely and grants unrestricted access to every resource type in the cluster. NEVER enable this in a shared, staging, or production\nenvironment -- it exists only to unblock local/dev iteration against a resource kind not yet\nadded to rbac.allowlist. Default: false (must be explicitly opted into).",
+          "title": "devModeWildcard",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "create",
+        "allowlist",
+        "devModeWildcard"
+      ],
+      "title": "rbac",
+      "type": "object"
+    },
+    "redis": {
+      "additionalProperties": false,
+      "description": "Redis store configuration (required - applier will fail to start without Redis)",
+      "properties": {
+        "address": {
+          "default": "",
+          "description": "Redis server address in format \"host:port\" (required)",
+          "title": "address",
+          "type": "string"
+        }
+      },
+      "required": [
+        "address"
+      ],
+      "title": "redis",
+      "type": "object"
+    },
+    "replicaCount": {
+      "default": 1,
+      "description": "Number of controller replicas to run",
+      "title": "replicaCount",
+      "type": "integer"
+    },
+    "resources": {
+      "additionalProperties": false,
+      "description": "Resource requests and limits for the controller container",
+      "properties": {
+        "limits": {
+          "additionalProperties": false,
+          "properties": {
+            "cpu": {
+              "default": "500m",
+              "title": "cpu",
+              "type": "string"
+            },
+            "memory": {
+              "default": "512Mi",
+              "title": "memory",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cpu",
+            "memory"
+          ],
+          "title": "limits",
+          "type": "object"
+        },
+        "requests": {
+          "additionalProperties": false,
+          "properties": {
+            "cpu": {
+              "default": "100m",
+              "title": "cpu",
+              "type": "string"
+            },
+            "memory": {
+              "default": "128Mi",
+              "title": "memory",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cpu",
+            "memory"
+          ],
+          "title": "requests",
+          "type": "object"
+        }
+      },
+      "required": [
+        "limits",
+        "requests"
+      ],
+      "title": "resources",
+      "type": "object"
+    },
+    "securityContext": {
+      "additionalProperties": false,
+      "description": "Container-level security context",
+      "properties": {
+        "allowPrivilegeEscalation": {
+          "default": false,
+          "title": "allowPrivilegeEscalation",
+          "type": "boolean"
+        },
+        "capabilities": {
+          "additionalProperties": false,
+          "properties": {
+            "drop": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  }
+                ],
+                "required": []
+              },
+              "title": "drop",
+              "type": "array"
+            }
+          },
+          "required": [
+            "drop"
+          ],
+          "title": "capabilities",
+          "type": "object"
+        },
+        "readOnlyRootFilesystem": {
+          "default": true,
+          "title": "readOnlyRootFilesystem",
+          "type": "boolean"
+        },
+        "runAsNonRoot": {
+          "default": true,
+          "title": "runAsNonRoot",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "allowPrivilegeEscalation",
+        "capabilities",
+        "readOnlyRootFilesystem",
+        "runAsNonRoot"
+      ],
+      "title": "securityContext",
+      "type": "object"
+    },
+    "serviceAccount": {
+      "additionalProperties": false,
+      "description": "Service account configuration - controller needs API access",
+      "properties": {
+        "annotations": {
+          "additionalProperties": { "type": "string" },
+          "description": "Annotations to add to the service account",
+          "required": [],
+          "title": "annotations",
+          "type": "object"
+        },
+        "create": {
+          "default": true,
+          "description": "Create a service account for the controller",
+          "title": "create",
+          "type": "boolean"
+        },
+        "name": {
+          "default": "",
+          "description": "Override the service account name",
+          "title": "name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "create",
+        "annotations",
+        "name"
+      ],
+      "title": "serviceAccount",
+      "type": "object"
+    }
+  },
+  "required": [
+    "imagePullSecrets",
+    "nameOverride",
+    "fullnameOverride",
+    "serviceAccount",
+    "rbac",
+    "podAnnotations",
+    "podLabels",
+    "podSecurityContext",
+    "securityContext",
+    "resources",
+    "replicaCount",
+    "image",
+    "applier",
+    "redis"
+  ],
+  "type": "object"
+}

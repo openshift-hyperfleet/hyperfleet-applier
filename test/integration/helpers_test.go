@@ -5,15 +5,19 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	k8srand "k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/dynamic"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -41,6 +45,10 @@ func configMapIdentity(dtype desire.DesireType, name string) desire.Identity {
 
 func clusterRoleIdentity(dtype desire.DesireType, name string) desire.Identity {
 	return identity(dtype, rbacGroup, "clusterroles", "", name)
+}
+
+func podIdentity(dtype desire.DesireType, name string) desire.Identity {
+	return identity(dtype, "", "pods", defaultNamespace, name)
 }
 
 // widgetIdentity builds an Identity against gvr - each controller's
@@ -95,6 +103,28 @@ func newClusterRoleContentWithNamespace(t *testing.T, name, namespace string) js
 	return raw
 }
 
+func newPodContent(t *testing.T, name, namespace string) json.RawMessage {
+	t.Helper()
+	obj := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "Pod",
+		"metadata": map[string]any{
+			"name":      name,
+			"namespace": namespace,
+		},
+		"spec": map[string]any{
+			"containers": []any{
+				map[string]any{"name": "pause", "image": "registry.k8s.io/pause:3.9"},
+			},
+		},
+	}
+	raw, err := json.Marshal(obj)
+	if err != nil {
+		t.Fatalf("marshal pod content: %v", err)
+	}
+	return raw
+}
+
 func findCondition(status desire.Status, condType string) *metav1.Condition {
 	for i := range status.Conditions {
 		if status.Conditions[i].Type == condType {
@@ -104,11 +134,22 @@ func findCondition(status desire.Status, condType string) *metav1.Condition {
 	return nil
 }
 
-// waitForReason polls store for id's ReadDesire until its Successful
+func assertConditionMessageContains(t *testing.T, status desire.Status, condType, substr string) {
+	t.Helper()
+	c := findCondition(status, condType)
+	if c == nil {
+		t.Fatalf("condition %q not found", condType)
+	}
+	if !strings.Contains(strings.ToLower(c.Message), strings.ToLower(substr)) {
+		t.Errorf("condition %q message = %q, want it to contain %q", condType, c.Message, substr)
+	}
+}
+
+// waitForReadReason polls store for id's ReadDesire until its Successful
 // condition's Reason matches want, or ctx's deadline is hit. Real watch
 // delivery has real (if small) latency against envtest's apiserver, unlike
 // the fakes the controllers' own unit tests use.
-func waitForReason(
+func waitForReadReason(
 	t *testing.T, ctx context.Context, store desire.SpecStore, id desire.Identity, want string,
 ) desire.ReadDesire {
 	t.Helper()
@@ -294,4 +335,69 @@ func createTarget(
 		}
 	})
 	return created
+}
+
+// startController launches start in a background goroutine and returns a
+// cleanup function that cancels ctx, joins the goroutine, and reports any
+// non-cancellation error. The caller registers the cleanup at the right
+// point in the t.Cleanup LIFO stack.
+func startController(t *testing.T, ctx context.Context, cancel context.CancelFunc, start func(context.Context) error) func() {
+	t.Helper()
+	errCh := make(chan error, 1)
+	go func() { errCh <- start(ctx) }()
+	return func() {
+		cancel()
+		select {
+		case err := <-errCh:
+			if err != nil && !errors.Is(err, context.Canceled) {
+				t.Errorf("controller returned unexpected error: %v", err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("controller did not shut down within 10s after context cancellation")
+		}
+	}
+}
+
+var allowlistVerbs = []string{"get", "list", "watch", "create", "update", "patch", "delete"}
+
+// restrictedRBACClient returns a dynamic client whose ClusterRole grants only
+// configmap access. Desires targeting any other resource (e.g. pods) draw a
+// real Forbidden. Only the client is restricted, not the mapper — callers
+// keep the admin envRESTMapper for GVR resolution.
+func restrictedRBACClient(t *testing.T) dynamic.Interface {
+	t.Helper()
+
+	suffix := k8srand.String(5)
+	userName := "applier-restricted-" + suffix
+	role := &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{Name: "applier-allowlist-" + suffix},
+		Rules: []rbacv1.PolicyRule{
+			{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: allowlistVerbs},
+		},
+	}
+	binding := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "applier-allowlist-binding-" + suffix},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacGroup, Kind: "ClusterRole", Name: role.Name},
+		Subjects:   []rbacv1.Subject{{Kind: "User", APIGroup: rbacGroup, Name: userName}},
+	}
+	for _, obj := range []client.Object{role, binding} {
+		if err := envK8sClient.Create(context.Background(), obj); err != nil {
+			t.Fatalf("create restricted %T: %v", obj, err)
+		}
+		t.Cleanup(func() {
+			if err := envK8sClient.Delete(context.Background(), obj); err != nil && !apierrors.IsNotFound(err) {
+				t.Errorf("clean up restricted %T %q: %v", obj, obj.GetName(), err)
+			}
+		})
+	}
+
+	authUser, err := envTestEnvironment.AddUser(envtest.User{Name: userName}, envRESTConfig)
+	if err != nil {
+		t.Fatalf("AddUser %q: %v", userName, err)
+	}
+	dyn, err := dynamic.NewForConfig(authUser.Config())
+	if err != nil {
+		t.Fatalf("dynamic client for restricted user %q: %v", userName, err)
+	}
+	return dyn
 }

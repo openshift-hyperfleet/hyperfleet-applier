@@ -93,6 +93,12 @@ CGO_ENABLED=1 and GOEXPERIMENT=strictfipsruntime go ...
 
 Reference on this: https://developers.redhat.com/articles/2025/01/23/fips-mode-red-hat-go-toolset
 
+## RBAC allowlist
+
+The applier's ClusterRole uses an explicit GVR allowlist.
+See [Deriving the RBAC allowlist](charts/README.md#deriving-the-rbac-allowlist) in the
+chart README for how to compute and configure it.
+
 ## Contributing
 
 1. Verify you're a member of the `openshift-hyperfleet` organization

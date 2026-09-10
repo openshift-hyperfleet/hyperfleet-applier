@@ -265,3 +265,30 @@ func TestEnvtest_ApplyDesire_NewCRDResolvedAutomatically(t *testing.T) {
 	// the new CRD on a later reconcile pass.
 	waitForApplyReason(t, ctx, store, id, desire.ReasonApplied)
 }
+
+// TestEnvtest_ApplyDesire_RBACDeniedApplyGetsKubeAPIError proves that an
+// ApplyDesire targeting a resource outside the allowlist (pods, while only
+// configmaps are permitted) has its SSA patch Forbidden, recorded as
+// KubeAPIError, and the object is never created.
+func TestEnvtest_ApplyDesire_RBACDeniedApplyGetsKubeAPIError(t *testing.T) {
+	const name = "pod-rbac-denied-apply"
+	ctx, cancel := context.WithCancel(context.Background())
+
+	restricted := restrictedRBACClient(t)
+
+	store := memory.New()
+	r := applydesire.New(store, store, restricted, envRESTMapper, testManagementCluster, applyPollInterval)
+	t.Cleanup(startController(t, ctx, cancel, r.Start))
+
+	id := podIdentity(desire.TypeApply, name)
+	seedApplyDesire(t, store, id, newPodContent(t, name, defaultNamespace))
+
+	ad := waitForApplyReason(t, ctx, store, id, desire.ReasonKubeAPIError)
+	assertConditionMessageContains(t, ad.Status, desire.TypeSuccessful, "forbidden")
+
+	if _, getErr := envDynamicClient.Resource(podGVR).Namespace(defaultNamespace).Get(
+		ctx, name, metav1.GetOptions{},
+	); !apierrors.IsNotFound(getErr) {
+		t.Errorf("Get Pod after denied apply = %v, want NotFound: it must never have been created", getErr)
+	}
+}

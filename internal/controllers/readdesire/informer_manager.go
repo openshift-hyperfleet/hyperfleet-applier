@@ -49,17 +49,23 @@ type InformerManager struct {
 	mu          sync.Mutex
 }
 
-// defaultInformerSyncTimeout is the timeout period for informer's cache resync
-const defaultInformerSyncTimeout = 30 * time.Second
+// DefaultInformerSyncTimeout is the timeout period for informer's cache
+// resync
+const DefaultInformerSyncTimeout = 30 * time.Second
 
 func newInformerManager(
-	dyn dynamic.Interface, queue workqueue.TypedRateLimitingInterface[desire.Identity],
+	dyn dynamic.Interface,
+	queue workqueue.TypedRateLimitingInterface[desire.Identity],
+	syncTimeout time.Duration,
 ) *InformerManager {
+	if syncTimeout <= 0 {
+		syncTimeout = DefaultInformerSyncTimeout
+	}
 	return &InformerManager{
 		dyn:         dyn,
 		queue:       queue,
 		informers:   make(map[desire.Identity]*trackedInformer),
-		syncTimeout: defaultInformerSyncTimeout,
+		syncTimeout: syncTimeout,
 	}
 }
 
@@ -121,19 +127,20 @@ func (m *InformerManager) Reconcile(
 	return failed
 }
 
-// Lister returns the cache.GenericLister for key's informer, if one is
-// currently running for it (false otherwise - e.g. not started this poll
-// tick yet, or already torn down). Intended for sync to read the cached
-// object without an apiserver round trip, e.g.
-// lister.ByNamespace(key.Namespace).Get(key.Name).
-func (m *InformerManager) Lister(key desire.Identity) (cache.GenericLister, bool) {
+// Lister returns the cache.GenericLister for key's informer, whether the
+// informer exists at all (ok), and whether its cache has completed its
+// initial list (synced). When ok is false the other values are zero. When
+// ok is true but synced is false, the cache may be empty for reasons other
+// than the target being absent (e.g. RBAC denial, network partition), so a
+// lister miss is ambiguous and must not be reported as NotFound.
+func (m *InformerManager) Lister(key desire.Identity) (cache.GenericLister, bool, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	ti, ok := m.informers[key]
-	if !ok {
-		return nil, false
+	if !ok || ti.lister == nil || ti.informer == nil {
+		return nil, false, false
 	}
-	return ti.lister, true
+	return ti.lister, true, ti.informer.HasSynced()
 }
 
 // start builds a single-object-scoped informer for target - a field selector
@@ -177,30 +184,48 @@ func (m *InformerManager) start(key desire.Identity, target informerTarget) erro
 	m.informers[key] = &trackedInformer{gvr: target.gvr, informer: informer, lister: gi.Lister(), stopCh: stopCh}
 	go informer.Run(stopCh)
 	go func() {
-		// syncStopCh closes on real teardown (stopCh) or after syncTimeout,
-		// whichever comes first, so WaitForCacheSync below can never block
-		// longer than syncTimeout
+		// Wait up to syncTimeout for the initial informer cache sync.
+		// The informer itself keeps running and retrying after this timeout.
 		syncStopCh := timeoutOrStop(stopCh, m.syncTimeout)
-		if !cache.WaitForCacheSync(syncStopCh, informer.HasSynced) {
-			select {
-			case <-stopCh:
-				// Real shutdown/teardown, not a timeout - the informer never
-				// got the chance to sync before it was torn down.
-				slog.Error("readdesire: informer cache sync did not complete before shutdown",
-					"namespace", key.Namespace, "name", key.Name)
-			default:
-				// syncTimeout elapsed but the informer is still running (and
-				// keeps retrying in the background regardless) - enqueue
-				// anyway rather than waiting forever. sync will read this
-				// key's still-empty cache and report ReasonNotFound
-				slog.Error("readdesire: informer cache did not sync within timeout, reporting anyway",
-					"namespace", key.Namespace, "name", key.Name, "timeout", m.syncTimeout)
-				m.queue.Add(key)
-			}
+
+		if cache.WaitForCacheSync(syncStopCh, informer.HasSynced) {
+			// Initial sync completed within the timeout. Enqueue once so the
+			// worker can observe the current cached state.
+			m.queue.Add(key)
 			return
 		}
-		// Enqueue once to let the worker report back to the desire's status
-		m.queue.Add(key)
+
+		select {
+		case <-stopCh:
+			// The informer was torn down before it completed its initial sync.
+			slog.Error(
+				"readdesire: informer cache sync did not complete before shutdown",
+				"namespace", key.Namespace,
+				"name", key.Name,
+			)
+			return
+
+		default:
+			// The sync timeout elapsed, but the informer is still running and
+			// will continue retrying its initial LIST in the background.
+			// Enqueue now so the worker can report KubeAPIError rather than
+			// waiting indefinitely.
+			slog.Error(
+				"readdesire: informer cache did not sync within timeout, reporting anyway",
+				"namespace", key.Namespace,
+				"name", key.Name,
+				"timeout", m.syncTimeout,
+			)
+			m.queue.Add(key)
+		}
+
+		// If the informer eventually completes its initial sync, enqueue again.
+		// This is necessary when the initial LIST is empty: no Add/Update/Delete
+		// event fires, so otherwise a desire reported as KubeAPIError after the
+		// timeout could remain stuck there instead of transitioning to NotFound.
+		if cache.WaitForCacheSync(stopCh, informer.HasSynced) {
+			m.queue.Add(key)
+		}
 	}()
 	return nil
 }

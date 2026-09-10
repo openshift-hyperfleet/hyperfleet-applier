@@ -76,16 +76,19 @@ func TestEnvtest_ReadDesire_FullLifecycle(t *testing.T) {
 		t.Fatalf("CreateReadDesire: %v", err)
 	}
 
-	c := readdesire.New(store, store, envDynamicClient, envRESTMapper, testManagementCluster, 100*time.Millisecond)
+	c := readdesire.New(
+		store, store, envDynamicClient, envRESTMapper, testManagementCluster,
+		100*time.Millisecond,
+	)
 	go func() { _ = c.Start(ctx) }()
 
 	// 1. Target doesn't exist yet.
-	waitForReason(t, ctx, store, id, desire.ReasonNotFound)
+	waitForReadReason(t, ctx, store, id, desire.ReasonNotFound)
 
 	// 2. Create the target - status must transition to Synced and mirror it.
 	target := newUnstructuredConfigMap(id.Name, defaultNamespace, map[string]any{"k": "v1"})
 	createTarget(t, ctx, configMapGVR, defaultNamespace, target)
-	got := waitForReason(t, ctx, store, id, desire.ReasonSynced)
+	got := waitForReadReason(t, ctx, store, id, desire.ReasonSynced)
 	if !strings.Contains(string(got.Status.KubeContent), `"k":"v1"`) {
 		t.Errorf("KubeContent = %s, want it to contain the initial data", got.Status.KubeContent)
 	}
@@ -131,7 +134,7 @@ func TestEnvtest_ReadDesire_FullLifecycle(t *testing.T) {
 	); err != nil {
 		t.Fatalf("delete target: %v", err)
 	}
-	waitForReason(t, ctx, store, id, desire.ReasonNotFound)
+	waitForReadReason(t, ctx, store, id, desire.ReasonNotFound)
 }
 
 // TestEnvtest_ReadDesire_ClusterScopedResource tests observe/observeLive's
@@ -149,11 +152,14 @@ func TestEnvtest_ReadDesire_ClusterScopedResource(t *testing.T) {
 		t.Fatalf("CreateReadDesire: %v", err)
 	}
 
-	c := readdesire.New(store, store, envDynamicClient, envRESTMapper, testManagementCluster, 100*time.Millisecond)
+	c := readdesire.New(
+		store, store, envDynamicClient, envRESTMapper, testManagementCluster,
+		100*time.Millisecond,
+	)
 	go func() { _ = c.Start(ctx) }()
 
 	// 1. Target doesn't exist yet.
-	waitForReason(t, ctx, store, id, desire.ReasonNotFound)
+	waitForReadReason(t, ctx, store, id, desire.ReasonNotFound)
 
 	// 2. Create the cluster-scoped target - status must transition to Synced.
 	target := &unstructured.Unstructured{Object: map[string]any{
@@ -163,7 +169,7 @@ func TestEnvtest_ReadDesire_ClusterScopedResource(t *testing.T) {
 		"rules":      []any{},
 	}}
 	createTarget(t, ctx, clusterRoleGVR, "", target)
-	got := waitForReason(t, ctx, store, id, desire.ReasonSynced)
+	got := waitForReadReason(t, ctx, store, id, desire.ReasonSynced)
 	if !strings.Contains(string(got.Status.KubeContent), name) {
 		t.Errorf("KubeContent = %s, want it to mention %q", got.Status.KubeContent, name)
 	}
@@ -172,7 +178,7 @@ func TestEnvtest_ReadDesire_ClusterScopedResource(t *testing.T) {
 	if err := envDynamicClient.Resource(clusterRoleGVR).Delete(ctx, name, metav1.DeleteOptions{}); err != nil {
 		t.Fatalf("delete target: %v", err)
 	}
-	waitForReason(t, ctx, store, id, desire.ReasonNotFound)
+	waitForReadReason(t, ctx, store, id, desire.ReasonNotFound)
 }
 
 // TestEnvtest_ReadDesire_GoroutinesDoNotLeakOnShutdown proves both that
@@ -191,7 +197,10 @@ func TestEnvtest_ReadDesire_GoroutinesDoNotLeakOnShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	c := readdesire.New(store, store, envDynamicClient, envRESTMapper, testManagementCluster, 50*time.Millisecond)
+	c := readdesire.New(
+		store, store, envDynamicClient, envRESTMapper, testManagementCluster,
+		50*time.Millisecond,
+	)
 
 	done := make(chan struct{})
 	go func() {
@@ -220,7 +229,7 @@ func TestEnvtest_ReadDesire_GoroutinesDoNotLeakOnShutdown(t *testing.T) {
 			created[i] = d
 		}
 		for _, d := range created {
-			waitForReason(t, ctx, store, d.Identity, desire.ReasonNotFound)
+			waitForReadReason(t, ctx, store, d.Identity, desire.ReasonNotFound)
 		}
 		for _, d := range created {
 			if err := store.DeleteReadDesire(ctx, d.Identity, testOwner, d.Version); err != nil {
@@ -268,11 +277,14 @@ func TestEnvtest_ReadDesire_NewCRDResolvedAutomatically(t *testing.T) {
 		t.Fatalf("CreateReadDesire: %v", err)
 	}
 
-	c := readdesire.New(store, store, envDynamicClient, envRESTMapper, testManagementCluster, 50*time.Millisecond)
+	c := readdesire.New(
+		store, store, envDynamicClient, envRESTMapper, testManagementCluster,
+		50*time.Millisecond,
+	)
 	go func() { _ = c.Start(ctx) }()
 
 	// 1. The Widget CRD doesn't exist yet: GVR resolution fails.
-	waitForReason(t, ctx, store, id, desire.ReasonPreCheckFailed)
+	waitForReadReason(t, ctx, store, id, desire.ReasonPreCheckFailed)
 
 	// 2. Install the CRD for real.
 	installWidgetCRD(t, readWidgetGVR, apiextensionsv1.NamespaceScoped)
@@ -280,5 +292,35 @@ func TestEnvtest_ReadDesire_NewCRDResolvedAutomatically(t *testing.T) {
 	// 3. No external Reset() call here - resolveGVR's own internal
 	// IsNoMatchError -> Reset() -> retry must pick up the new CRD on its own,
 	// on the very next poll tick.
-	waitForReason(t, ctx, store, id, desire.ReasonNotFound)
+	waitForReadReason(t, ctx, store, id, desire.ReasonNotFound)
+}
+
+// TestEnvtest_ReadDesire_RBACDeniedListReportsKubeAPIError proves that a
+// ReadDesire targeting a resource outside the allowlist (pods, while only
+// configmaps are permitted), whose LIST is Forbidden so its cache never
+// syncs, reports KubeAPIError rather than the misleading NotFound it would
+// get from an unsynced cache. observe checks HasSynced() before trusting a
+// lister NotFound: an unsynced cache means the absence is unconfirmed.
+func TestEnvtest_ReadDesire_RBACDeniedListReportsKubeAPIError(t *testing.T) {
+	const name = "pod-rbac-denied-read"
+	ctx, cancel := context.WithCancel(context.Background())
+
+	restricted := restrictedRBACClient(t)
+
+	store := memory.New()
+	id := podIdentity(desire.TypeRead, name)
+	if _, err := store.CreateReadDesire(ctx, desire.ReadDesire{
+		Identity: id, Owner: testOwner, TargetVersion: testTargetVersion,
+	}); err != nil {
+		t.Fatalf("CreateReadDesire: %v", err)
+	}
+
+	c := readdesire.New(
+		store, store, restricted, envRESTMapper, testManagementCluster,
+		50*time.Millisecond, readdesire.WithInformerSyncTimeout(200*time.Millisecond),
+	)
+	t.Cleanup(startController(t, ctx, cancel, c.Start))
+
+	rd := waitForReadReason(t, ctx, store, id, desire.ReasonKubeAPIError)
+	assertConditionMessageContains(t, rd.Status.Status, desire.TypeSuccessful, "not synced")
 }

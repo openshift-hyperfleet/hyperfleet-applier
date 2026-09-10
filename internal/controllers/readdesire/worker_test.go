@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 
@@ -19,27 +19,21 @@ import (
 
 // ---- fixtures & helpers -------------------------------------------------
 
-// newControllerWithLister builds a Controller whose InformerManager has at
-// most one pre-seeded tracked entry for key, wired to lister - bypassing real
-// informer startup entirely so sync/observe can be tested in isolation. A
-// nil lister leaves no tracked entry, exercising the "no informer yet" path.
-func newControllerWithLister(status statusStore, key desire.Identity, lister cache.GenericLister) *Controller {
-	return newControllerWithListerAndDyn(status, key, lister, nil, nil)
+// fakeInformer is a minimal cache.SharedIndexInformer stub that returns a
+// fixed HasSynced value, used to control the synced state reported by
+// InformerManager.Lister without starting a real informer.
+type fakeInformer struct {
+	cache.SharedIndexInformer
+	synced bool
 }
 
-// newControllerWithListerAndDyn is newControllerWithLister plus dyn/mapper,
-// needed only by tests that exercise observeLive's direct-Get fallback (which
-// calls resolveGVR against mapper and Get against dyn) - every other test
-// only ever reaches the Lister, so nil dyn/mapper there are never dereferenced.
-func newControllerWithListerAndDyn(
-	status statusStore, key desire.Identity, lister cache.GenericLister,
-	dyn dynamic.Interface, mapper meta.ResettableRESTMapper,
-) *Controller {
-	im := &InformerManager{informers: map[desire.Identity]*trackedInformer{}}
-	if lister != nil {
-		im.informers[key] = &trackedInformer{lister: lister}
-	}
-	return &Controller{status: status, informers: im, dyn: dyn, mapper: mapper}
+func (f fakeInformer) HasSynced() bool { return f.synced }
+
+// seedInformer injects a fake tracked informer entry for key into c's
+// InformerManager, wired to lister with the given synced state - bypassing
+// real informer startup so sync/observe can be tested in isolation.
+func seedInformer(c *Controller, key desire.Identity, lister cache.GenericLister, synced bool) {
+	c.informers.informers[key] = &trackedInformer{lister: lister, informer: fakeInformer{synced: synced}}
 }
 
 // ---- decorators used to observe/inject store behavior -------------------
@@ -86,87 +80,114 @@ func (g *getErroringStatusStore) GetReadDesire(context.Context, desire.Identity)
 
 // ---- tests ---------------------------------------------------------------
 
-// TestSync_ObserveOutcomes covers observe's three read outcomes, which
-// differ only in what's tracked by InformerManager: a found object, a
-// tracked informer with an empty cache, and no tracked informer at all. The
-// latter two both record ReasonNotFound but exercise different branches
-// (observe's !ok check vs. the lister's own NotFound), which is why they're
-// kept as distinct cases rather than merged into one.
-func TestSync_ObserveOutcomes(t *testing.T) {
-	const namespace = "default"
-	cases := []struct {
-		obj        *unstructured.Unstructured
-		name       string
-		cmName     string
-		wantStatus metav1.ConditionStatus
-		wantReason string
-		noInformer bool
-	}{
-		{
-			name:       "FoundObjectRecordsSynced",
-			cmName:     "cm-found",
-			obj:        newUnstructuredConfigMap("cm-found", namespace, map[string]any{"k": "v"}),
-			wantStatus: metav1.ConditionTrue,
-			wantReason: desire.ReasonSynced,
-		},
-		{
-			name:       "TrackedInformerEmptyCacheRecordsNotFound",
-			cmName:     "cm-empty-cache",
-			wantStatus: metav1.ConditionFalse,
-			wantReason: desire.ReasonNotFound,
-		},
-		{
-			name:       "NoTrackedInformerRecordsNotFound",
-			cmName:     "cm-no-informer",
-			noInformer: true,
-			wantStatus: metav1.ConditionFalse,
-			wantReason: desire.ReasonNotFound,
-		},
+// TestSync_FoundObjectRecordsSynced proves a found object in a synced cache
+// records ReasonSynced with the object's content.
+func TestSync_FoundObjectRecordsSynced(t *testing.T) {
+	ctx := context.Background()
+	store := memory.New()
+	id := readIdentity("default", "cm-found")
+	seedReadDesire(t, store, id, "owner-1")
+
+	obj := newUnstructuredConfigMap("cm-found", "default", map[string]any{"k": "v"})
+	c := New(store, store, newFakeDynamicClient(t), newTestMapper(), testManagementCluster, time.Hour)
+	seedInformer(c, id, newLister(t, configMapGVR, obj), true)
+
+	if err := c.sync(ctx, id); err != nil {
+		t.Fatalf("sync() error = %v, want nil", err)
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
-			store := memory.New()
-			id := readIdentity(namespace, tc.cmName)
-			seedReadDesire(t, store, id, "owner-1")
+	got, err := store.GetReadDesire(ctx, id)
+	if err != nil {
+		t.Fatalf("GetReadDesire: %v", err)
+	}
+	cond := findCondition(got.Status.Status, desire.TypeSuccessful)
+	if cond == nil || cond.Status != metav1.ConditionTrue || cond.Reason != desire.ReasonSynced {
+		t.Errorf("condition = %+v, want Status=True Reason=%q", cond, desire.ReasonSynced)
+	}
+	wantContent, err := json.Marshal(obj)
+	if err != nil {
+		t.Fatalf("marshal want content: %v", err)
+	}
+	if string(got.Status.KubeContent) != string(wantContent) {
+		t.Errorf("KubeContent = %s, want %s", got.Status.KubeContent, wantContent)
+	}
+}
 
-			var lister cache.GenericLister
-			switch {
-			case tc.noInformer:
-				// lister stays nil: newControllerWithLister leaves no tracked entry.
-			case tc.obj != nil:
-				lister = newLister(t, configMapGVR, tc.obj)
-			default:
-				lister = newLister(t, configMapGVR) // tracked, but empty
-			}
-			c := newControllerWithLister(store, id, lister)
+// TestSync_SyncedEmptyCacheRecordsNotFound proves that a synced cache with no
+// object is a confirmed absence: the informer completed its initial list and
+// the object is genuinely not there.
+func TestSync_SyncedEmptyCacheRecordsNotFound(t *testing.T) {
+	ctx := context.Background()
+	store := memory.New()
+	id := readIdentity("default", "cm-empty-cache")
+	seedReadDesire(t, store, id, "owner-1")
 
-			if err := c.sync(ctx, id); err != nil {
-				t.Fatalf("sync() error = %v, want nil", err)
-			}
+	c := New(store, store, newFakeDynamicClient(t), newTestMapper(), testManagementCluster, time.Hour)
+	seedInformer(c, id, newLister(t, configMapGVR), true)
 
-			got, err := store.GetReadDesire(ctx, id)
-			if err != nil {
-				t.Fatalf("GetReadDesire: %v", err)
-			}
-			cond := findCondition(got.Status.Status, desire.TypeSuccessful)
-			if cond == nil || cond.Status != tc.wantStatus || cond.Reason != tc.wantReason {
-				t.Errorf("condition = %+v, want Status=%s Reason=%q", cond, tc.wantStatus, tc.wantReason)
-			}
+	if err := c.sync(ctx, id); err != nil {
+		t.Fatalf("sync() error = %v, want nil", err)
+	}
 
-			if tc.obj != nil {
-				wantContent, err := json.Marshal(tc.obj)
-				if err != nil {
-					t.Fatalf("marshal want content: %v", err)
-				}
-				if string(got.Status.KubeContent) != string(wantContent) {
-					t.Errorf("KubeContent = %s, want %s", got.Status.KubeContent, wantContent)
-				}
-			} else if got.Status.KubeContent != nil {
-				t.Errorf("KubeContent = %s, want nil", got.Status.KubeContent)
-			}
-		})
+	got, err := store.GetReadDesire(ctx, id)
+	if err != nil {
+		t.Fatalf("GetReadDesire: %v", err)
+	}
+	cond := findCondition(got.Status.Status, desire.TypeSuccessful)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != desire.ReasonNotFound {
+		t.Errorf("condition = %+v, want Status=False Reason=%q", cond, desire.ReasonNotFound)
+	}
+}
+
+// TestSync_UnsyncedEmptyCacheRecordsKubeAPIError proves that a NotFound from
+// an unsynced cache is ambiguous (could be RBAC denial, network partition)
+// and must not be reported as a confirmed absence.
+func TestSync_UnsyncedEmptyCacheRecordsKubeAPIError(t *testing.T) {
+	ctx := context.Background()
+	store := memory.New()
+	id := readIdentity("default", "cm-unsynced-cache")
+	seedReadDesire(t, store, id, "owner-1")
+
+	c := New(store, store, newFakeDynamicClient(t), newTestMapper(), testManagementCluster, time.Hour)
+	seedInformer(c, id, newLister(t, configMapGVR), false)
+
+	if err := c.sync(ctx, id); err != nil {
+		t.Fatalf("sync() error = %v, want nil", err)
+	}
+
+	got, err := store.GetReadDesire(ctx, id)
+	if err != nil {
+		t.Fatalf("GetReadDesire: %v", err)
+	}
+	cond := findCondition(got.Status.Status, desire.TypeSuccessful)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != desire.ReasonKubeAPIError {
+		t.Errorf("condition = %+v, want Status=False Reason=%q", cond, desire.ReasonKubeAPIError)
+	}
+}
+
+// TestSync_NoTrackedInformerRecordsNotFound proves the "no informer at all"
+// path (teardown race) records NotFound - distinct from the empty-cache path
+// above, which goes through the lister.
+func TestSync_NoTrackedInformerRecordsNotFound(t *testing.T) {
+	ctx := context.Background()
+	store := memory.New()
+	id := readIdentity("default", "cm-no-informer")
+	seedReadDesire(t, store, id, "owner-1")
+
+	c := New(store, store, newFakeDynamicClient(t), newTestMapper(), testManagementCluster, time.Hour)
+	// No seedInformer call: exercises the "no informer yet" path.
+
+	if err := c.sync(ctx, id); err != nil {
+		t.Fatalf("sync() error = %v, want nil", err)
+	}
+
+	got, err := store.GetReadDesire(ctx, id)
+	if err != nil {
+		t.Fatalf("GetReadDesire: %v", err)
+	}
+	cond := findCondition(got.Status.Status, desire.TypeSuccessful)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != desire.ReasonNotFound {
+		t.Errorf("condition = %+v, want Status=False Reason=%q", cond, desire.ReasonNotFound)
 	}
 }
 
@@ -175,7 +196,7 @@ func TestSync_DeletedDesireIsNoop(t *testing.T) {
 	store := memory.New()
 	id := readIdentity("default", "cm-gone") // never seeded: GetReadDesire returns ErrNotFound
 
-	c := newControllerWithLister(store, id, nil)
+	c := New(store, store, newFakeDynamicClient(t), newTestMapper(), testManagementCluster, time.Hour)
 	if err := c.sync(ctx, id); err != nil {
 		t.Fatalf("sync() error = %v, want nil for a desire that no longer exists", err)
 	}
@@ -189,7 +210,8 @@ func TestSync_UnchangedObjectSuppressesStatusWrite(t *testing.T) {
 	seedReadDesire(t, base, id, "owner-1")
 
 	obj := newUnstructuredConfigMap("cm-noop", "default", map[string]any{"k": "v"})
-	c := newControllerWithLister(counting, id, newLister(t, configMapGVR, obj))
+	c := New(base, counting, newFakeDynamicClient(t), newTestMapper(), testManagementCluster, time.Hour)
+	seedInformer(c, id, newLister(t, configMapGVR, obj), true)
 
 	if err := c.sync(ctx, id); err != nil {
 		t.Fatalf("sync() [1st] error = %v, want nil", err)
@@ -224,7 +246,8 @@ func TestSync_UpdateFailureIsPropagatedForRetry(t *testing.T) {
 	updateErr := errors.New("status store unavailable")
 	failing := &erroringStatusStore{statusStore: base, err: updateErr}
 	obj := newUnstructuredConfigMap("cm-update-fails", "default", map[string]any{"k": "v"})
-	c := newControllerWithLister(failing, id, newLister(t, configMapGVR, obj))
+	c := New(base, failing, newFakeDynamicClient(t), newTestMapper(), testManagementCluster, time.Hour)
+	seedInformer(c, id, newLister(t, configMapGVR, obj), true)
 
 	err := c.sync(ctx, id)
 	if !errors.Is(err, updateErr) {
@@ -290,9 +313,9 @@ func TestSync_VersionMismatchFallback(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			base := memory.New()
+			store := memory.New()
 			id := readIdentity(namespace, tc.cmName)
-			seedReadDesire(t, base, id, "owner-1") // declares TargetVersion "v1"
+			seedReadDesire(t, store, id, "owner-1") // declares TargetVersion "v1"
 
 			// The cache is always stale in this scenario: it reports apiVersion "v2".
 			stale := newUnstructuredConfigMap(id.Name, namespace, map[string]any{"k": staleDataValue})
@@ -312,13 +335,14 @@ func TestSync_VersionMismatchFallback(t *testing.T) {
 				createdLive = created
 			}
 
-			c := newControllerWithListerAndDyn(base, id, newLister(t, configMapGVR, stale), dyn, tc.mapper)
+			c := New(store, store, dyn, tc.mapper, testManagementCluster, time.Hour)
+			seedInformer(c, id, newLister(t, configMapGVR, stale), true)
 
 			if err := c.sync(ctx, id); err != nil {
 				t.Fatalf("sync() error = %v, want nil", err)
 			}
 
-			got, err := base.GetReadDesire(ctx, id)
+			got, err := store.GetReadDesire(ctx, id)
 			if err != nil {
 				t.Fatalf("GetReadDesire: %v", err)
 			}
@@ -352,7 +376,8 @@ func TestProcessNextWorkItem_SuccessForgetsKey(t *testing.T) {
 	seedReadDesire(t, store, id, "owner-1")
 	obj := newUnstructuredConfigMap("cm-success", "default", map[string]any{"k": "v"})
 
-	c := newControllerWithLister(store, id, newLister(t, configMapGVR, obj))
+	c := New(store, store, newFakeDynamicClient(t), newTestMapper(), testManagementCluster, time.Hour)
+	seedInformer(c, id, newLister(t, configMapGVR, obj), true)
 	queue := workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[desire.Identity]())
 	defer queue.ShutDown()
 	c.queue = queue
@@ -380,7 +405,7 @@ func TestProcessNextWorkItem_ContextCanceledForgetsKey(t *testing.T) {
 	id := readIdentity("default", "cm-canceled")
 	failing := &getErroringStatusStore{statusStore: memory.New(), err: context.Canceled}
 
-	c := newControllerWithLister(failing, id, nil)
+	c := New(memory.New(), failing, newFakeDynamicClient(t), newTestMapper(), testManagementCluster, time.Hour)
 	queue := workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[desire.Identity]())
 	defer queue.ShutDown()
 	c.queue = queue
@@ -401,7 +426,7 @@ func TestProcessNextWorkItem_GenericErrorRetries(t *testing.T) {
 	id := readIdentity("default", "cm-retry")
 	failing := &getErroringStatusStore{statusStore: memory.New(), err: errors.New("backend unavailable")}
 
-	c := newControllerWithLister(failing, id, nil)
+	c := New(memory.New(), failing, newFakeDynamicClient(t), newTestMapper(), testManagementCluster, time.Hour)
 	queue := workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[desire.Identity]())
 	defer queue.ShutDown()
 	c.queue = queue

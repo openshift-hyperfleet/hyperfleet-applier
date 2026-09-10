@@ -200,9 +200,7 @@ func runServe(parent context.Context, cfg *config.Config) error {
 		newDiscoveryRefresher(mapper, cfg.DiscoveryRefreshInterval),
 		applydesire.New(store, store, dyn, mapper, cfg.ManagementCluster, pollInterval),
 		deletedesire.New(store, store, dyn, mapper, cfg.ManagementCluster, pollInterval),
-		readdesire.New(
-			store, store, dyn, mapper, cfg.ManagementCluster, pollInterval,
-		),
+		readdesire.New(store, store, dyn, mapper, cfg.ManagementCluster, pollInterval),
 	}
 
 	slog.InfoContext(ctx,

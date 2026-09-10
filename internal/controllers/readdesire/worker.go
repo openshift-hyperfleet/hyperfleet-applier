@@ -97,7 +97,7 @@ func (c *Controller) applyStatus(
 func (c *Controller) observe(
 	ctx context.Context, key desire.Identity, targetVersion string, current desire.ReadStatus,
 ) desire.ReadStatus {
-	lister, ok := c.informers.Lister(key)
+	lister, ok, cacheSynced := c.informers.Lister(key)
 	if !ok {
 		// No informer running for this key. InformerManager.start always
 		// writes m.informers[key] before wiring anything that could enqueue
@@ -124,6 +124,10 @@ func (c *Controller) observe(
 		obj, err = lister.ByNamespace(key.Namespace).Get(key.Name)
 	}
 	if apierrors.IsNotFound(err) {
+		if !cacheSynced {
+			return kubeAPIError(current, fmt.Errorf(
+				"informer cache has not synced yet, cannot confirm absence: %w", err))
+		}
 		return notFound(current)
 	}
 	if err != nil {

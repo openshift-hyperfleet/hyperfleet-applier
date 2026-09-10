@@ -74,6 +74,19 @@ type Controller struct {
 	pollInterval      time.Duration
 }
 
+// Option configures optional Controller behavior.
+type Option func(*options)
+
+type options struct {
+	informerSyncTimeout time.Duration
+}
+
+// WithInformerSyncTimeout overrides the default timeout for waiting on a
+// newly-started informer's initial cache sync.
+func WithInformerSyncTimeout(d time.Duration) Option {
+	return func(o *options) { o.informerSyncTimeout = d }
+}
+
 // New builds a Controller bound to one partition (managementCluster).
 // dyn is the dynamic client used to build per-desire informers; mapper
 // resolves a partial (Group, Resource) to its full, versioned
@@ -88,7 +101,12 @@ func New(
 	mapper meta.ResettableRESTMapper,
 	managementCluster string,
 	pollInterval time.Duration,
+	opts ...Option,
 ) *Controller {
+	o := options{}
+	for _, fn := range opts {
+		fn(&o)
+	}
 	queue := workqueue.NewTypedRateLimitingQueue(
 		workqueue.DefaultTypedControllerRateLimiter[desire.Identity](),
 	)
@@ -100,7 +118,7 @@ func New(
 		managementCluster: managementCluster,
 		pollInterval:      pollInterval,
 		queue:             queue,
-		informers:         newInformerManager(dyn, queue),
+		informers:         newInformerManager(dyn, queue, o.informerSyncTimeout),
 	}
 }
 

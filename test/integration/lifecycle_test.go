@@ -54,7 +54,10 @@ func TestEnvtest_ApplyReadDeleteLifecycle(t *testing.T) {
 
 	applyR := applydesire.New(store, store, envDynamicClient, envRESTMapper, testManagementCluster, 50*time.Millisecond)
 	deleteR := deletedesire.New(store, store, envDynamicClient, envRESTMapper, testManagementCluster, 50*time.Millisecond)
-	readC := readdesire.New(store, store, envDynamicClient, envRESTMapper, testManagementCluster, 100*time.Millisecond)
+	readC := readdesire.New(
+		store, store, envDynamicClient, envRESTMapper, testManagementCluster,
+		100*time.Millisecond,
+	)
 	go func() { _ = applyR.Start(ctx) }()
 	go func() { _ = deleteR.Start(ctx) }()
 	go func() { _ = readC.Start(ctx) }()
@@ -63,7 +66,7 @@ func TestEnvtest_ApplyReadDeleteLifecycle(t *testing.T) {
 	waitForApplyReason(t, ctx, store, applyID, desire.ReasonApplied)
 
 	// 2. readdesire, running independently, observes it.
-	got := waitForReason(t, ctx, store, readID, desire.ReasonSynced)
+	got := waitForReadReason(t, ctx, store, readID, desire.ReasonSynced)
 	if want := `"k":"v1"`; !strings.Contains(string(got.Status.KubeContent), want) {
 		t.Errorf("KubeContent = %s, want it to contain %s", got.Status.KubeContent, want)
 	}
@@ -100,7 +103,7 @@ func TestEnvtest_ApplyReadDeleteLifecycle(t *testing.T) {
 	}
 
 	// 6. readdesire, again independently, observes the deletion.
-	waitForReason(t, ctx, store, readID, desire.ReasonNotFound)
+	waitForReadReason(t, ctx, store, readID, desire.ReasonNotFound)
 
 	// 7. A cleared ApplyDesire must not resurrect the resource: it no longer
 	// exists in the store, so applyR's continuous reconcile loop can never
@@ -147,14 +150,17 @@ func TestEnvtest_ApplyReadDeleteLifecycle_ClusterScoped(t *testing.T) {
 
 	applyR := applydesire.New(store, store, envDynamicClient, envRESTMapper, testManagementCluster, 50*time.Millisecond)
 	deleteR := deletedesire.New(store, store, envDynamicClient, envRESTMapper, testManagementCluster, 50*time.Millisecond)
-	readC := readdesire.New(store, store, envDynamicClient, envRESTMapper, testManagementCluster, 100*time.Millisecond)
+	readC := readdesire.New(
+		store, store, envDynamicClient, envRESTMapper, testManagementCluster,
+		100*time.Millisecond,
+	)
 	go func() { _ = applyR.Start(ctx) }()
 	go func() { _ = deleteR.Start(ctx) }()
 	go func() { _ = readC.Start(ctx) }()
 
 	// applydesire creates the cluster-scoped resource; readdesire observes it.
 	waitForApplyReason(t, ctx, store, applyID, desire.ReasonApplied)
-	got := waitForReason(t, ctx, store, readID, desire.ReasonSynced)
+	got := waitForReadReason(t, ctx, store, readID, desire.ReasonSynced)
 	if !strings.Contains(string(got.Status.KubeContent), name) {
 		t.Errorf("KubeContent = %s, want it to mention %q", got.Status.KubeContent, name)
 	}
@@ -164,5 +170,5 @@ func TestEnvtest_ApplyReadDeleteLifecycle_ClusterScoped(t *testing.T) {
 		t.Fatalf("CreateDeleteDesire: %v", err)
 	}
 	waitForDeleteReason(t, ctx, store, deleteID, desire.ReasonDeleted)
-	waitForReason(t, ctx, store, readID, desire.ReasonNotFound)
+	waitForReadReason(t, ctx, store, readID, desire.ReasonNotFound)
 }

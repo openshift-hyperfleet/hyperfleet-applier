@@ -89,5 +89,29 @@ Validate required values
 {{- if not .Values.redis.address }}
 {{- fail "redis.address is required" }}
 {{- end }}
+{{- if and .Values.rbac.create (not .Values.rbac.devModeWildcard) (not .Values.rbac.allowlist) }}
+{{- fail "rbac.allowlist must not be empty when rbac.create=true and rbac.devModeWildcard=false. Populate an explicit GVR allowlist, or set rbac.devModeWildcard=true for local/dev only (see chart README warning)." }}
+{{- end }}
+{{- if and .Values.rbac.create .Values.rbac.devModeWildcard .Values.rbac.allowlist }}
+{{- fail "rbac.devModeWildcard=true and rbac.allowlist are mutually exclusive. The wildcard silently overrides the allowlist — remove the allowlist entries or set rbac.devModeWildcard=false." }}
+{{- end }}
+{{- range $i, $entry := .Values.rbac.allowlist }}
+{{- if not $entry.apiGroups }}
+{{- fail (printf "rbac.allowlist[%d].apiGroups must not be empty — specify at least one API group (use \"\" for the core group)." $i) }}
+{{- end }}
+{{- if not $entry.resources }}
+{{- fail (printf "rbac.allowlist[%d].resources must not be empty — specify at least one resource type." $i) }}
+{{- end }}
+{{- range $entry.apiGroups }}
+{{- if eq . "*" }}
+{{- fail (printf "rbac.allowlist[%d].apiGroups contains \"*\". Wildcards are not allowed in the explicit allowlist — use rbac.devModeWildcard=true for dev/local only." $i) }}
+{{- end }}
+{{- end }}
+{{- range $entry.resources }}
+{{- if eq . "*" }}
+{{- fail (printf "rbac.allowlist[%d].resources contains \"*\". Wildcards are not allowed in the explicit allowlist — use rbac.devModeWildcard=true for dev/local only." $i) }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- end }}
 

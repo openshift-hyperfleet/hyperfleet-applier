@@ -239,3 +239,27 @@ func TestEnvtest_DeleteDesire_NewCRDResolvedAutomatically(t *testing.T) {
 	// picks up the new CRD on a later pass.
 	waitForDeleteReason(t, ctx, store, id, desire.ReasonDeleted)
 }
+
+// TestEnvtest_DeleteDesire_RBACDeniedGetGetsKubeAPIError proves that a
+// DeleteDesire targeting a resource outside the allowlist (pods, while only
+// configmaps are permitted) has its confirmation GET Forbidden, recorded as
+// KubeAPIError rather than misread as the NotFound that means ReasonDeleted.
+func TestEnvtest_DeleteDesire_RBACDeniedGetGetsKubeAPIError(t *testing.T) {
+	const name = "pod-rbac-denied-delete"
+	ctx, cancel := context.WithCancel(context.Background())
+
+	restricted := restrictedRBACClient(t)
+
+	store := memory.New()
+	r := deletedesire.New(store, store, restricted, envRESTMapper, testManagementCluster, deletePollInterval)
+
+	id := podIdentity(desire.TypeDelete, name)
+	if _, err := store.CreateDeleteDesire(ctx, desire.DeleteDesire{Identity: id, Owner: testOwner}); err != nil {
+		t.Fatalf("CreateDeleteDesire: %v", err)
+	}
+
+	t.Cleanup(startController(t, ctx, cancel, r.Start))
+
+	dd := waitForDeleteReason(t, ctx, store, id, desire.ReasonKubeAPIError)
+	assertConditionMessageContains(t, dd.Status, desire.TypeSuccessful, "forbidden")
+}

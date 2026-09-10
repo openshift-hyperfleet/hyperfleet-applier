@@ -21,7 +21,7 @@ func newTestInformerManager(t *testing.T) (*InformerManager, workqueue.TypedRate
 	t.Helper()
 	dyn := newFakeDynamicClient(t)
 	queue := workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[desire.Identity]())
-	m := newInformerManager(dyn, queue)
+	m := newInformerManager(dyn, queue, DefaultInformerSyncTimeout)
 	t.Cleanup(m.shutdownAll)
 	return m, queue
 }
@@ -40,12 +40,12 @@ func TestInformerManager_ReconcileStartsAndStopsInformers(t *testing.T) {
 	want := map[desire.Identity]informerTarget{key: target}
 
 	m.Reconcile(seen, want)
-	if _, ok := m.Lister(key); !ok {
+	if _, ok, _ := m.Lister(key); !ok {
 		t.Fatalf("Lister(key) ok = false immediately after Reconcile started it, want true")
 	}
 
 	m.Reconcile(map[desire.Identity]struct{}{}, map[desire.Identity]informerTarget{}) // nothing left at all
-	if _, ok := m.Lister(key); ok {
+	if _, ok, _ := m.Lister(key); ok {
 		t.Errorf("Lister(key) ok = true after Reconcile removed it, want false")
 	}
 }
@@ -62,14 +62,14 @@ func TestInformerManager_TransientResolveFailureDoesNotStopInformer(t *testing.T
 	target := informerTarget{gvr: configMapGVR, namespace: "default", name: "cm-flaky-gvr"}
 
 	m.Reconcile(map[desire.Identity]struct{}{key: {}}, map[desire.Identity]informerTarget{key: target})
-	if _, ok := m.Lister(key); !ok {
+	if _, ok, _ := m.Lister(key); !ok {
 		t.Fatalf("Lister(key) ok = false immediately after Reconcile started it, want true")
 	}
 
 	// key is still seen (the desire is still listed) but resolveGVR failed
 	// this tick, so want is empty - the informer must survive.
 	m.Reconcile(map[desire.Identity]struct{}{key: {}}, map[desire.Identity]informerTarget{})
-	if _, ok := m.Lister(key); !ok {
+	if _, ok, _ := m.Lister(key); !ok {
 		t.Errorf("Lister(key) ok = false after a transient resolve failure, want true: " +
 			"an already-running informer must not be torn down just because want no longer contains its key")
 	}
@@ -128,7 +128,7 @@ func TestInformerManager_RebuildsInformerOnVersionChange(t *testing.T) {
 	m.Reconcile(seen, map[desire.Identity]informerTarget{
 		key: {gvr: v1GVR, namespace: namespace, name: "cm-version-change"},
 	})
-	firstLister, ok := m.Lister(key)
+	firstLister, ok, _ := m.Lister(key)
 	if !ok {
 		t.Fatalf("Lister(key) ok = false after first Reconcile, want true")
 	}
@@ -136,7 +136,7 @@ func TestInformerManager_RebuildsInformerOnVersionChange(t *testing.T) {
 	m.Reconcile(seen, map[desire.Identity]informerTarget{
 		key: {gvr: v2GVR, namespace: namespace, name: "cm-version-change"},
 	})
-	secondLister, ok := m.Lister(key)
+	secondLister, ok, _ := m.Lister(key)
 	if !ok {
 		t.Fatalf("Lister(key) ok = false after version-change Reconcile, want true")
 	}
@@ -163,8 +163,7 @@ func TestInformerManager_StartEnqueuesAfterSyncTimeout(t *testing.T) {
 		)
 	})
 	queue := workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[desire.Identity]())
-	m := newInformerManager(dyn, queue)
-	m.syncTimeout = 100 * time.Millisecond // production default stays 30s; this instance only is shortened
+	m := newInformerManager(dyn, queue, 100*time.Millisecond)
 	t.Cleanup(m.shutdownAll)
 	t.Cleanup(queue.ShutDown)
 

@@ -6,7 +6,24 @@ metadata:
   labels:
     {{- include "hyperfleet-applier.labels" . | nindent 4 }}
 rules:
-{{- toYaml .Values.rbac.rules | nindent 2 }}
+{{- if .Values.rbac.devModeWildcard }}
+  # =====================================================================
+  # WARNING: rbac.devModeWildcard=true -- DEV-MODE WILDCARD RBAC.
+  # This ClusterRole grants unrestricted access to ALL resources in ALL
+  # API groups. This MUST NOT be used in shared, staging, or production
+  # environments. Set rbac.devModeWildcard=false and populate
+  # rbac.allowlist instead before promoting this release.
+  # =====================================================================
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+{{- else }}
+{{- range .Values.rbac.allowlist }}
+  - apiGroups: {{ .apiGroups | toJson }}
+    resources: {{ .resources | toJson }}
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]
+{{- end }}
+{{- end }}
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1
