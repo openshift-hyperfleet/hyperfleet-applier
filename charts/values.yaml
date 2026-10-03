@@ -2,26 +2,64 @@
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
 
+# @schema
+# type: array
+# required: true
+# @schema
 # -- List of image pull secrets to use for pulling container images
 imagePullSecrets: []
+# @schema
+# type: string
+# required: true
+# @schema
 # -- Override the chart name
 nameOverride: ""
+# @schema
+# type: string
+# @schema
 # -- Override the full release name
 fullnameOverride: ""
 
+# @schema
+# type: object
+# required: true
+# @schema
 # Service account configuration - controller needs API access
 serviceAccount:
+  # @schema
+  # type: boolean
+  # @schema
   # -- Create a service account for the controller
   create: true
+  # @schema
+  # type: object
+  # additionalProperties:
+  #   type: string
+  # @schema
   # -- Annotations to add to the service account
   annotations: {}
+  # @schema
+  # type: string
+  # @schema
   # -- Override the service account name
   name: ""
 
+# @schema
+# type: object
+# required: true
+# @schema
 # RBAC configuration for the controller
 rbac:
+  # @schema
+  # type: boolean
+  # required: true
+  # @schema
   # -- Create RBAC resources (ClusterRole, ClusterRoleBinding)
   create: true
+  # @schema
+  # type: array
+  # required: true
+  # @schema
   # -- Explicit allowlist of API group + resource pairs the applier's ServiceAccount may manage
   # on this cluster. Each entry must specify `apiGroups` and `resources`; verbs (get, list, watch,
   # create, patch, delete) are added automatically by the template. Do NOT add a "*"
@@ -29,6 +67,10 @@ rbac:
   # This list must be tailored per Helm release/management cluster; see "Deriving the RBAC
   # allowlist" in the chart README for how to compute it.
   allowlist: []
+  # @schema
+  # type: boolean
+  # required: true
+  # @schema
   # Example: if an adapter produces ConfigMaps on this cluster:
   # allowlist:
   #   - apiGroups: [""]
@@ -36,63 +78,217 @@ rbac:
   # -- DANGER: replaces rbac.allowlist with a cluster-wide "*"/"*" ClusterRole rule when
   # true. This disables the allowlist entirely and grants unrestricted access to every
   # resource type in the cluster. NEVER enable this in a shared, staging, or production
-  # environment -- it exists only to unblock local/dev iteration against a resource kind not yet
-  # added to rbac.allowlist. Default: false (must be explicitly opted into).
+  # cluster; add the required resource types to rbac.allowlist instead.
+  # Default: false (must be explicitly opted into).
   devModeWildcard: false
 
+# @schema
+# type: object
+# required: true
+# additionalProperties:
+#   type: string
+# @schema
 # -- Annotations to add to controller pods
 podAnnotations: {}
 
+# @schema
+# type: object
+# required: true
+# additionalProperties:
+#   type: string
+# @schema
 # -- Labels to add to controller pods
 podLabels: {}
 
+# @schema
+# type: object
+# required: true
+# @schema
 # -- Pod-level security context
 podSecurityContext:
+  # @schema
+  # type: boolean
+  # required: true
+  # @schema
   runAsNonRoot: true
+  # @schema
+  # type: object
+  # required: true
+  # @schema
   seccompProfile:
+    # @schema
+    # type: string
+    # @schema
     type: RuntimeDefault
 
+# @schema
+# type: object
+# required: true
+# @schema
 # -- Container-level security context
 securityContext:
+  # @schema
+  # type: boolean
+  # @schema
   allowPrivilegeEscalation: false
+  # @schema
+  # type: object
+  # @schema
   capabilities:
+    # @schema
+    # type: array
+    # @schema
     drop:
     - ALL
+  # @schema
+  # type: boolean
+  # @schema
   readOnlyRootFilesystem: true
+  # @schema
+  # type: boolean
+  # @schema
   runAsNonRoot: true
 
+# @schema
+# type: object
+# required: true
+# @schema
 # -- Resource requests and limits for the controller container
 resources:
+  # @schema
+  # type: object
+  # required: true
+  # @schema
   limits:
+    # @schema
+    # type: string
+    # required: true
+    # @schema
     cpu: 500m
+    # @schema
+    # type: string
+    # required: true
+    # @schema
     memory: 512Mi
+  # @schema
+  # type: object
+  # required: true
+  # @schema
   requests:
+    # @schema
+    # type: string
+    # required: true
+    # @schema
     cpu: 100m
+    # @schema
+    # required: true
+    # type: string
+    # @schema
     memory: 128Mi
 
+# @schema
+# type: integer
+# required: true
+# @schema
 # -- Number of controller replicas to run
 replicaCount: 1
 
+# @schema
+# type: object
+# required: true
+# @schema
 # Container image configuration
 image:
+  # @schema
+  # type: string
+  # required: true
+  # @schema
   # -- Container image registry (required)
   registry: ""
+  # @schema
+  # type: string
+  # required: true
+  # @schema
   # -- Container image repository (required)
   repository: ""
+  # @schema
+  # type: string
+  # required: true
+  # @schema
   # -- Container image tag (required)
   tag: ""
+  # @schema
+  # type: string
+  # @schema
   # -- Image pull policy
   pullPolicy: IfNotPresent
 
+# @schema
+# type: object
+# required: true
+# @schema
 # Applier configuration
-applier:
+config:
+  # @schema
+  # type: string
+  # required: true
+  # @schema
   # -- Management cluster identifier - must match the partition this applier instance manages (required)
   managementCluster: ""
-  # -- Polling interval for reconciliation loops (e.g., "5s", "1m") (required)
-  pollInterval: ""
+  # @schema
+  # type: string
+  # required: true
+  # @schema
+  # -- Polling interval for reconciliation loops (e.g., "5s", "1m")
+  pollInterval: "1m"
+  # @schema
+  # type: string
+  # required: true
+  # @schema
+  # -- Interval between Kubernetes discovery cache refreshes
+  discoveryRefreshInterval: "30s"
+  # @schema
+  # type: object
+  # required: true
+  # @schema
+  redis:
+    # @schema
+    # type: string
+    # required: true
+    # @schema
+    # -- Redis connection URL
+    url: ""
+  # @schema
+  # type: object
+  # @schema
+  # Logging configuration
+  log:
+    # @schema
+    # type: string
+    # @schema
+    # -- Log level (e.g., "info", "debug", "warn", "error")
+    level: "info"
+    # @schema
+    # type: string
+    # @schema
+    # -- Log format ("json" or "text")
+    format: "json"
+    # @schema
+    # type: string
+    # @schema
+    # -- Log output destination ("stdout" or "stderr")
+    output: "stdout"
+  # @schema
+  # type: string
+  # @schema
+  kubeConfigPath: ""
 
-# Redis store configuration (required - applier will fail to start without Redis)
-redis:
-  # -- Redis server address in format "host:port" (required)
-  address: ""
-
+# @schema
+# type: string
+# @schema
+# -- Raw config.yaml content that replaces the template-generated config.yaml
+# configOverride must have the required values management_cluster, poll_interval,
+# discovery_refresh_interval, and clients.redis.url
+# when set, default values in config are ignored
+# Example: --set-file configOverride=configs/applier.yaml
+configOverride: ""

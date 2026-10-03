@@ -12,8 +12,6 @@ import (
 	"github.com/spf13/viper"
 )
 
-const defaultConfigFile = "/etc/hyperfleet/config.yaml"
-
 // EnvPrefix is the prefix for environment variables that override applier configuration.
 const EnvPrefix = "HYPERFLEET"
 
@@ -50,19 +48,16 @@ type KubernetesConfig struct {
 	KubeConfigPath string `yaml:"kube_config_path,omitempty" mapstructure:"kube_config_path"`
 }
 
-// New creates an applier configuration with defaults.
-func New() *Config {
+// newConfig returns a Config with only logging defaults set so the binary
+// can emit structured logs even when the config is partially broken.
+// All other defaults live in the Helm chart's values.yaml.
+func newConfig() *Config {
 	return &Config{
 		Log: LogConfig{
 			Level:  "info",
 			Format: "json",
 			Output: "stdout",
 		},
-		Clients: ClientsConfig{
-			Redis: RedisConfig{URL: "redis://localhost:6379/0"},
-		},
-		PollInterval:             time.Minute,
-		DiscoveryRefreshInterval: 30 * time.Second,
 	}
 }
 
@@ -96,19 +91,17 @@ var cliFlags = map[string]string{
 // LoadConfig loads configuration with the standard HyperFleet precedence:
 // CLI flags > environment variables > YAML file > defaults.
 func LoadConfig(configFile string, flags *pflag.FlagSet) (*Config, error) {
-	cfg := New()
+	cfg := newConfig()
 	if configFile == "" {
-		if env := os.Getenv(EnvPrefix + "_CONFIG"); env != "" {
-			configFile = env
-		} else {
-			configFile = defaultConfigFile
-		}
+		configFile = os.Getenv(EnvPrefix + "_CONFIG")
 	}
 
 	v := viper.NewWithOptions(viper.KeyDelimiter("::"))
-	v.SetConfigFile(configFile)
-	if err := v.ReadInConfig(); err != nil {
-		return nil, fmt.Errorf("failed to read config file: %w", err)
+	if configFile != "" {
+		v.SetConfigFile(configFile)
+		if err := v.ReadInConfig(); err != nil {
+			return nil, fmt.Errorf("failed to read config file: %w", err)
+		}
 	}
 
 	for configPath, envSuffix := range viperKeyMappings {

@@ -1,0 +1,27 @@
+{{- include "hyperfleet-applier.validateConfigMap" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "hyperfleet-applier.fullname" . }}
+  labels:
+    {{- include "hyperfleet-applier.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+{{- if .Values.configOverride }}
+{{ .Values.configOverride | indent 4 }}
+{{- else }}
+    {{- with .Values.config }}
+    management_cluster: {{ .managementCluster | quote }}
+    poll_interval: {{ .pollInterval | quote }}
+    discovery_refresh_interval: {{ .discoveryRefreshInterval | quote }}
+    log:
+      level: {{  .log.level | quote }}
+      format: {{ .log.format | quote }}
+      output: {{ .log.output | quote }}
+    clients:
+      redis:
+        url: {{ .redis.url | quote }}
+      kubernetes:
+        kube_config_path: {{ .kubeConfigPath | quote }}
+      {{- end }}
+{{- end }}

@@ -20,7 +20,7 @@ HyperFleet Applier - Kubernetes controller for reconciling ApplyDesire and Delet
 | serviceAccount.name | string | `""` | Override the service account name |
 | rbac.create | bool | `true` | Create RBAC resources (ClusterRole, ClusterRoleBinding) |
 | rbac.allowlist | list | `[]` | Explicit allowlist of API group + resource pairs the applier's ServiceAccount may manage on this cluster. Each entry must specify `apiGroups` and `resources`; verbs (get, list, watch, create, patch, delete) are added automatically by the template. Do NOT add a "*" apiGroup or resource here -- see rbac.devModeWildcard for the (off-by-default) escape hatch. This list must be tailored per Helm release/management cluster; see "Deriving the RBAC allowlist" in the chart README for how to compute it. |
-| rbac.devModeWildcard | bool | `false` | DANGER: replaces rbac.allowlist with a cluster-wide "*"/"*" ClusterRole rule when true. This disables the allowlist entirely and grants unrestricted access to every resource type in the cluster. NEVER enable this in a shared, staging, or production environment -- it exists only to unblock local/dev iteration against a resource kind not yet added to rbac.allowlist. Default: false (must be explicitly opted into). |
+| rbac.devModeWildcard | bool | `false` | DANGER: replaces rbac.allowlist with a cluster-wide "*"/"*" ClusterRole rule when true. This disables the allowlist entirely and grants unrestricted access to every resource type in the cluster. NEVER enable this in a shared, staging, or production cluster; add the required resource types to rbac.allowlist instead. Default: false (must be explicitly opted into). |
 | podAnnotations | object | `{}` | Annotations to add to controller pods |
 | podLabels | object | `{}` | Labels to add to controller pods |
 | podSecurityContext | object | `{"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}}` | Pod-level security context |
@@ -31,9 +31,15 @@ HyperFleet Applier - Kubernetes controller for reconciling ApplyDesire and Delet
 | image.repository | string | `""` | Container image repository (required) |
 | image.tag | string | `""` | Container image tag (required) |
 | image.pullPolicy | string | `"IfNotPresent"` | Image pull policy |
-| applier.managementCluster | string | `""` | Management cluster identifier - must match the partition this applier instance manages (required) |
-| applier.pollInterval | string | `""` | Polling interval for reconciliation loops (e.g., "5s", "1m") (required) |
-| redis.address | string | `""` | Redis server address in format "host:port" (required) |
+| config.managementCluster | string | `""` | Management cluster identifier - must match the partition this applier instance manages (required) |
+| config.pollInterval | string | `"1m"` | Polling interval for reconciliation loops (e.g., "5s", "1m") |
+| config.discoveryRefreshInterval | string | `"30s"` | Interval between Kubernetes discovery cache refreshes |
+| config.redis.url | string | `""` | Redis connection URL |
+| config.log.level | string | `"info"` | Log level (e.g., "info", "debug", "warn", "error") |
+| config.log.format | string | `"json"` | Log format ("json" or "text") |
+| config.log.output | string | `"stdout"` | Log output destination ("stdout" or "stderr") |
+| config.kubeConfigPath | string | `""` |  |
+| configOverride | string | `""` | Raw config.yaml content that replaces the template-generated config.yaml configOverride must have the required values management_cluster, poll_interval, discovery_refresh_interval, and clients.redis.url when set, default values in config are ignored Example: --set-file configOverride=configs/applier.yaml |
 
 ## Deriving the RBAC allowlist
 

@@ -1,0 +1,133 @@
+suite: ConfigMap tests
+templates:
+  - templates/configmap.yaml
+set:
+  image.registry: quay.io
+  image.repository: openshift-hyperfleet/hyperfleet-applier
+  image.tag: test
+  rbac.devModeWildcard: true
+
+tests:
+  - it: renders config.yaml from values
+    set:
+      config.managementCluster: test-cluster
+      config.pollInterval: "2m"
+      config.discoveryRefreshInterval: "30s"
+      config.redis.url: "redis://redis:6379/0"
+      config.log.level: info
+      config.log.format: json
+      config.log.output: stdout
+      config.kubeConfigPath: ""
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: data["config.yaml"]
+          value: |
+            management_cluster: "test-cluster"
+            poll_interval: "2m"
+            discovery_refresh_interval: "30s"
+            log:
+              level: "info"
+              format: "json"
+              output: "stdout"
+            clients:
+              redis:
+                url: "redis://redis:6379/0"
+              kubernetes:
+                kube_config_path: ""
+
+  - it: configOverride replaces template-generated config
+    set:
+      config.managementCluster: test-cluster
+      config.pollInterval: "5s"
+      config.redis.url: "redis://redis:6379/0"
+      configOverride: |
+        management_cluster: override-cluster
+        poll_interval: 12m
+        discovery_refresh_interval: 34s
+
+        log:
+          level: info
+          format: json
+          output: stdout
+
+        clients:
+          redis:
+            url: redis://localhost:6379/0
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "management_cluster: override-cluster"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "poll_interval: 12m"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "discovery_refresh_interval: 34s"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "level: info"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "format: json"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "output: stdout"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "url: redis://localhost:6379/0"
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "test-cluster"
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "poll_interval: 5s"
+
+  - it: configOverride replaces default config values
+    set:
+      configOverride: |
+        management_cluster: override-cluster
+        poll_interval: 12m
+        discovery_refresh_interval: 34s
+
+        log:
+          level: info
+          format: json
+          output: stdout
+
+        clients:
+          redis:
+            url: redis://localhost:6379/0
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "management_cluster: override-cluster"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "poll_interval: 12m"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "discovery_refresh_interval: 34s"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "level: info"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "format: json"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "output: stdout"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "url: redis://localhost:6379/0"
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "test-cluster"
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "poll_interval: 5s"

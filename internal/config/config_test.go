@@ -68,34 +68,23 @@ func TestLoadConfigRejectsUnknownFields(t *testing.T) {
 	}
 }
 
-// TestLoadConfigPreservesDefaults proves omitted YAML fields keep New() values.
-func TestLoadConfigPreservesDefaults(t *testing.T) {
+// TestLoadConfigRejectsOmittedRequired proves that required fields cause
+// validation errors when omitted — the Go binary has no hidden defaults.
+func TestLoadConfigRejectsOmittedRequired(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte("management_cluster: cluster\n"), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
-	cfg, err := LoadConfig(path, nil)
-	if err != nil {
-		t.Fatalf("LoadConfig() error = %v", err)
-	}
-	if cfg.PollInterval != time.Minute {
-		t.Errorf("PollInterval = %s, want 1m", cfg.PollInterval)
-	}
-	if cfg.DiscoveryRefreshInterval != 30*time.Second {
-		t.Errorf("DiscoveryRefreshInterval = %s, want 30s", cfg.DiscoveryRefreshInterval)
-	}
-	if cfg.Clients.Redis.URL != "redis://localhost:6379/0" {
-		t.Errorf("Redis URL = %q, want default", cfg.Clients.Redis.URL)
-	}
-	if cfg.Log.Level != "info" || cfg.Log.Format != "json" || cfg.Log.Output != "stdout" {
-		t.Errorf("Log = %+v, want info/json/stdout", cfg.Log)
+	_, err := LoadConfig(path, nil)
+	if err == nil {
+		t.Fatal("LoadConfig() should fail when required fields are omitted")
 	}
 }
 
 // TestRedactedHidesRedisPassword proves config dumps replace the Redis password.
 func TestRedactedHidesRedisPassword(t *testing.T) {
-	cfg := New()
+	cfg := &Config{}
 	cfg.Clients.Redis.URL = "rediss://user:secret@redis.example.com:6379/0"
 
 	redacted := cfg.Redacted()
@@ -120,7 +109,7 @@ func TestRedactSecretsRemovesURLPasswords(t *testing.T) {
 		t.Errorf("RedactSecrets = %q, want redacted userinfo", got)
 	}
 
-	plain := New().Clients.Redis.URL
+	plain := "redis://localhost:6379/0"
 	if RedactSecrets(plain) != plain {
 		t.Errorf("RedactSecrets(%q) = %q, want unchanged", plain, RedactSecrets(plain))
 	}

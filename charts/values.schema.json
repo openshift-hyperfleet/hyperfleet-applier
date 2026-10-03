@@ -2,10 +2,48 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
   "properties": {
-    "applier": {
+    "config": {
       "additionalProperties": false,
       "description": "Applier configuration",
       "properties": {
+        "discoveryRefreshInterval": {
+          "default": "30s",
+          "description": "Interval between Kubernetes discovery cache refreshes",
+          "title": "discoveryRefreshInterval",
+          "type": "string"
+        },
+        "kubeConfigPath": {
+          "default": "",
+          "title": "kubeConfigPath",
+          "type": "string"
+        },
+        "log": {
+          "additionalProperties": false,
+          "description": "Logging configuration",
+          "properties": {
+            "format": {
+              "default": "json",
+              "description": "Log format (\"json\" or \"text\")",
+              "title": "format",
+              "type": "string"
+            },
+            "level": {
+              "default": "info",
+              "description": "Log level (e.g., \"info\", \"debug\", \"warn\", \"error\")",
+              "title": "level",
+              "type": "string"
+            },
+            "output": {
+              "default": "stdout",
+              "description": "Log output destination (\"stdout\" or \"stderr\")",
+              "title": "output",
+              "type": "string"
+            }
+          },
+          "required": [],
+          "title": "log",
+          "type": "object"
+        },
         "managementCluster": {
           "default": "",
           "description": "Management cluster identifier - must match the partition this applier instance manages (required)",
@@ -13,18 +51,42 @@
           "type": "string"
         },
         "pollInterval": {
-          "default": "",
-          "description": "Polling interval for reconciliation loops (e.g., \"5s\", \"1m\") (required)",
+          "default": "1m",
+          "description": "Polling interval for reconciliation loops (e.g., \"5s\", \"1m\")",
           "title": "pollInterval",
           "type": "string"
+        },
+        "redis": {
+          "additionalProperties": false,
+          "properties": {
+            "url": {
+              "default": "",
+              "description": "Redis connection URL",
+              "title": "url",
+              "type": "string"
+            }
+          },
+          "required": [
+            "url"
+          ],
+          "title": "redis",
+          "type": "object"
         }
       },
       "required": [
         "managementCluster",
-        "pollInterval"
+        "pollInterval",
+        "discoveryRefreshInterval",
+        "redis"
       ],
-      "title": "applier",
+      "title": "config",
       "type": "object"
+    },
+    "configOverride": {
+      "default": "",
+      "description": "Raw config.yaml content that replaces the template-generated config.yaml\nconfigOverride must have the required values management_cluster, poll_interval,\ndiscovery_refresh_interval, and clients.redis.url\nwhen set, default values in config are ignored\nExample: --set-file configOverride=configs/applier.yaml",
+      "title": "configOverride",
+      "type": "string"
     },
     "fullnameOverride": {
       "default": "",
@@ -70,8 +132,7 @@
       "required": [
         "registry",
         "repository",
-        "tag",
-        "pullPolicy"
+        "tag"
       ],
       "title": "image",
       "type": "object"
@@ -91,14 +152,18 @@
       "type": "string"
     },
     "podAnnotations": {
-      "additionalProperties": { "type": "string" },
+      "additionalProperties": {
+        "type": "string"
+      },
       "description": "Annotations to add to controller pods",
       "required": [],
       "title": "podAnnotations",
       "type": "object"
     },
     "podLabels": {
-      "additionalProperties": { "type": "string" },
+      "additionalProperties": {
+        "type": "string"
+      },
       "description": "Labels to add to controller pods",
       "required": [],
       "title": "podLabels",
@@ -122,9 +187,7 @@
               "type": "string"
             }
           },
-          "required": [
-            "type"
-          ],
+          "required": [],
           "title": "seccompProfile",
           "type": "object"
         }
@@ -141,25 +204,9 @@
       "description": "RBAC configuration for the controller",
       "properties": {
         "allowlist": {
-          "description": "Explicit allowlist of API group + resource pairs the applier's ServiceAccount may manage on this cluster. Each entry must specify apiGroups and resources; verbs are added automatically by the template. Do NOT add a \"*\" apiGroup or resource here -- see rbac.devModeWildcard for the (off-by-default) escape hatch.",
+          "description": "Explicit allowlist of API group + resource pairs the applier's ServiceAccount may manage\non this cluster. Each entry must specify `apiGroups` and `resources`; verbs (get, list, watch,\ncreate, patch, delete) are added automatically by the template. Do NOT add a \"*\"\napiGroup or resource here -- see rbac.devModeWildcard for the (off-by-default) escape hatch.\nThis list must be tailored per Helm release/management cluster; see \"Deriving the RBAC\nallowlist\" in the chart README for how to compute it.",
           "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "apiGroups": {
-                "type": "array",
-                "items": { "type": "string" },
-                "minItems": 1,
-                "description": "API groups to allow (e.g. [\"\"] for core, [\"apps\"]). Wildcards (\"*\") are not permitted."
-              },
-              "resources": {
-                "type": "array",
-                "items": { "type": "string" },
-                "minItems": 1,
-                "description": "Resource types to allow (e.g. [\"deployments\", \"replicasets\"]). Wildcards (\"*\") are not permitted."
-              }
-            },
-            "required": ["apiGroups", "resources"]
+            "required": []
           },
           "title": "allowlist",
           "type": "array"
@@ -172,7 +219,7 @@
         },
         "devModeWildcard": {
           "default": false,
-          "description": "DANGER: replaces rbac.allowlist with a cluster-wide \"*\"/\"*\" ClusterRole rule when\ntrue. This disables the allowlist entirely and grants unrestricted access to every resource type in the cluster. NEVER enable this in a shared, staging, or production\nenvironment -- it exists only to unblock local/dev iteration against a resource kind not yet\nadded to rbac.allowlist. Default: false (must be explicitly opted into).",
+          "description": "Example: if an adapter produces ConfigMaps on this cluster:\nallowlist:\n  - apiGroups: [\"\"]\n    resources: [\"configmaps\"]\nDANGER: replaces rbac.allowlist with a cluster-wide \"*\"/\"*\" ClusterRole rule when\ntrue. This disables the allowlist entirely and grants unrestricted access to every\nresource type in the cluster. NEVER enable this in a shared, staging, or production\ncluster; add the required resource types to rbac.allowlist instead.\nDefault: false (must be explicitly opted into).",
           "title": "devModeWildcard",
           "type": "boolean"
         }
@@ -183,23 +230,6 @@
         "devModeWildcard"
       ],
       "title": "rbac",
-      "type": "object"
-    },
-    "redis": {
-      "additionalProperties": false,
-      "description": "Redis store configuration (required - applier will fail to start without Redis)",
-      "properties": {
-        "address": {
-          "default": "",
-          "description": "Redis server address in format \"host:port\" (required)",
-          "title": "address",
-          "type": "string"
-        }
-      },
-      "required": [
-        "address"
-      ],
-      "title": "redis",
       "type": "object"
     },
     "replicaCount": {
@@ -287,9 +317,7 @@
               "type": "array"
             }
           },
-          "required": [
-            "drop"
-          ],
+          "required": [],
           "title": "capabilities",
           "type": "object"
         },
@@ -304,12 +332,7 @@
           "type": "boolean"
         }
       },
-      "required": [
-        "allowPrivilegeEscalation",
-        "capabilities",
-        "readOnlyRootFilesystem",
-        "runAsNonRoot"
-      ],
+      "required": [],
       "title": "securityContext",
       "type": "object"
     },
@@ -318,7 +341,9 @@
       "description": "Service account configuration - controller needs API access",
       "properties": {
         "annotations": {
-          "additionalProperties": { "type": "string" },
+          "additionalProperties": {
+            "type": "string"
+          },
           "description": "Annotations to add to the service account",
           "required": [],
           "title": "annotations",
@@ -337,11 +362,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "create",
-        "annotations",
-        "name"
-      ],
+      "required": [],
       "title": "serviceAccount",
       "type": "object"
     }
@@ -349,7 +370,6 @@
   "required": [
     "imagePullSecrets",
     "nameOverride",
-    "fullnameOverride",
     "serviceAccount",
     "rbac",
     "podAnnotations",
@@ -359,8 +379,7 @@
     "resources",
     "replicaCount",
     "image",
-    "applier",
-    "redis"
+    "config"
   ],
   "type": "object"
 }

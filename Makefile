@@ -38,6 +38,7 @@ HELM_DOCS := $(call gotool,helm-docs)
 GOLANGCI_LINT := $(call gotool,golangci-lint)
 SETUP_ENVTEST := $(call gotool,setup-envtest)
 KUBECONFORM := $(call gotool,kubeconform)
+YQ := $(call gotool,yq)
 
 
 .PHONY: help
@@ -207,6 +208,13 @@ verify-helm-docs: ## Verify chart README is up to date
 	@git diff --exit-code charts/README.md > /dev/null 2>&1 || \
 		(echo "ERROR: charts/README.md is out of date. Run 'make helm-docs' and commit the result." && exit 1)
 
+.PHONY: test-helm-unit
+test-helm-unit:
+	@$(HELM) plugin list | grep -q unittest \
+	|| { echo "Error: helm-unittest plugin not installed.\n\
+	Run: 'helm plugin install https://github.com/helm-unittest/helm-unittest' "; exit 1; }
+	$(HELM) unittest charts/
+
 .PHONY: test-helm
-test-helm: verify-helm-docs ## Test Helm charts (lint, template, validate, kubeconform)
-	@HELM="$(HELM)" KUBECONFORM="$(KUBECONFORM)" ./scripts/test-helm.sh
+test-helm: verify-helm-docs test-helm-unit ## Test Helm charts (unit, lint, template, validate, kubeconform)
+	@HELM="$(HELM)" KUBECONFORM="$(KUBECONFORM)" YQ="$(YQ)" ./scripts/test-helm.sh

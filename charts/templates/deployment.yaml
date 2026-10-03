@@ -12,10 +12,11 @@ spec:
       {{- include "hyperfleet-applier.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-      {{- with .Values.podAnnotations }}
       annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
       labels:
         {{- include "hyperfleet-applier.labels" . | nindent 8 }}
         {{- with .Values.podLabels }}
@@ -39,12 +40,14 @@ spec:
           {{- end }}
           image: {{ include "hyperfleet-applier.fullImageName" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          env:
-            - name: REDIS_ADDRESS
-              value: {{ .Values.redis.address | quote }}
-            - name: POLL_INTERVAL
-              value: {{ .Values.applier.pollInterval | quote }}
-            - name: MANAGEMENT_CLUSTER
-              value: {{ .Values.applier.managementCluster | quote }}
+          args: ["serve", "--config", "/etc/hyperfleet/config.yaml"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/hyperfleet
+              readOnly: true
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "hyperfleet-applier.fullname" . }}
