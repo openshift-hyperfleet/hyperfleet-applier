@@ -98,16 +98,15 @@ func (r *Runnable) Start(ctx context.Context) error {
 		watchInterval: cfg.RetryPeriod,
 	}
 	cfg.Callbacks = leaderelection.LeaderCallbacks{
-		OnNewLeader: func(identity string) {
-			// Runs synchronously in the elector loop before Run returns, so the
-			// flag is visible to the read below; OnStartedLeading runs on a
-			// separate goroutine with no such guarantee. Never reset when
-			// another holder is reported: once led, finished must be drained.
-			if identity == cfg.Lock.Identity() {
-				acquired.Store(true)
-			}
-		},
 		OnStartedLeading: func(leaderCtx context.Context) {
+			// Recorded before anything else: Start reads it after Run returns
+			// to decide whether finished will be sent. OnStartedLeading runs
+			// on a goroutine spawned by Run (as does OnNewLeader, which is
+			// why it cannot carry this flag); if the election context dies
+			// before this line executes, Start sees false, skips the drain,
+			// and the controllers exit on the canceled leader context with
+			// the buffered send unable to block.
+			acquired.Store(true)
 			slog.InfoContext(leaderCtx, "acquired management-cluster leadership", "lease", cfg.Lock.Describe())
 			finished <- runControllers(leaderCtx, cancel, gate, r.runnables)
 		},
@@ -223,14 +222,6 @@ func (l *trackingLock) sinceLastSuccess() time.Duration {
 		return time.Duration(math.MaxInt64)
 	}
 	return time.Since(l.lastSuccess)
-}
-
-// backdateLastSuccess moves the recorded success into the past; tests use it
-// to simulate a process that stalled after renewing.
-func (l *trackingLock) backdateLastSuccess(age time.Duration) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.lastSuccess = time.Now().Add(-age)
 }
 
 // staleGate implements reconciler.LeaderGate on top of the tracking lock.

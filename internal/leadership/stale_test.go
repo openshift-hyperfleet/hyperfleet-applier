@@ -237,3 +237,11 @@ func TestStaleLeadershipBlocksWritesInsideRenewDeadline(t *testing.T) {
 }
 
 func ptr(s string) *string { return &s }
+
+// backdateLastSuccess moves the recorded success into the past to simulate
+// a process that stalled after renewing.
+func (l *trackingLock) backdateLastSuccess(age time.Duration) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lastSuccess = time.Now().Add(-age)
+}
