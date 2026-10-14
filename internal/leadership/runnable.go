@@ -133,6 +133,9 @@ func (r *Runnable) Start(ctx context.Context) error {
 	return ErrLeadershipLost
 }
 
+// runControllers starts every runnable under a context carrying the
+// leadership gate, cancels the election when any of them exits, and waits
+// for all of them plus the freshness watcher before returning.
 func runControllers(ctx context.Context, stopElection context.CancelFunc, gate *staleGate,
 	runnables []reconciler.Runnable,
 ) error {
@@ -191,6 +194,7 @@ type trackingLock struct {
 	mu          sync.Mutex
 }
 
+// Create records the issue time of a successful Lease creation.
 func (l *trackingLock) Create(ctx context.Context, ler resourcelock.LeaderElectionRecord) error {
 	// The issue time, not the response time, is the freshness point: the
 	// apiserver may commit a write long before a stalled process handles
@@ -204,6 +208,7 @@ func (l *trackingLock) Create(ctx context.Context, ler resourcelock.LeaderElecti
 	return nil
 }
 
+// Update records the issue time of a successful Lease renewal.
 func (l *trackingLock) Update(ctx context.Context, ler resourcelock.LeaderElectionRecord) error {
 	started := time.Now()
 	if err := l.Interface.Update(ctx, ler); err != nil {

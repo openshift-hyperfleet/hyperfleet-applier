@@ -27,6 +27,8 @@ import (
 	"github.com/openshift-hyperfleet/hyperfleet-applier/pkg/desire/store/memory"
 )
 
+// TestStaleGateDeniesAndCancels covers the gate standalone: fresh allows,
+// stale denies and cancels, and a never-successful lock reads as stale.
 func TestStaleGateDeniesAndCancels(t *testing.T) {
 	lock := &trackingLock{}
 	lock.markSuccess(time.Now())
@@ -54,6 +56,8 @@ func TestStaleGateDeniesAndCancels(t *testing.T) {
 	}
 }
 
+// TestCanWriteWithoutGate pins that contexts without a gate always allow
+// writes, so controllers used outside the leadership wiring are unaffected.
 func TestCanWriteWithoutGate(t *testing.T) {
 	if err := reconciler.CanWrite(t.Context()); err != nil {
 		t.Fatalf("context without gate denied writes: %v", err)
@@ -237,6 +241,7 @@ func TestStaleLeadershipBlocksWritesInsideRenewDeadline(t *testing.T) {
 	}
 }
 
+// ptr returns a pointer to s; a test-local replacement for k8s.io/utils/ptr.
 func ptr(s string) *string { return &s }
 
 // delayedLock is a resourcelock whose Update succeeds only after a delay
