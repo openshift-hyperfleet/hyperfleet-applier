@@ -89,6 +89,22 @@ func testEnvtestFailover(t *testing.T, cfg *rest.Config, failRenewal bool) {
 	var failures [3]atomic.Bool
 	var writes [3]atomic.Int32
 	var stopReplica [3]context.CancelFunc
+	// Cancel before draining, and drain only the replicas that actually
+	// started, in case setup fails partway through the loop below.
+	var startedReplicas int
+	t.Cleanup(func() {
+		cancel()
+		for range startedReplicas {
+			select {
+			case err := <-results:
+				if err != nil && !errors.Is(err, ErrLeadershipLost) {
+					t.Error(err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Error("replica failed to stop")
+			}
+		}
+	})
 	for i := range 3 {
 		clientConfig := rest.CopyConfig(cfg)
 		clientConfig.WrapTransport = func(rt http.RoundTripper) http.RoundTripper {
@@ -121,23 +137,11 @@ func testEnvtestFailover(t *testing.T, cfg *rest.Config, failRenewal bool) {
 			t.Fatal(err)
 		}
 		fastElection(r)
+		startedReplicas++
 		replicaCtx, stop := context.WithCancel(ctx)
 		stopReplica[i] = stop
 		go func() { results <- r.Start(replicaCtx) }()
 	}
-	t.Cleanup(func() {
-		cancel()
-		for range 3 {
-			select {
-			case err := <-results:
-				if err != nil && !errors.Is(err, ErrLeadershipLost) {
-					t.Error(err)
-				}
-			case <-time.After(5 * time.Second):
-				t.Error("replica failed to stop")
-			}
-		}
-	})
 	leader := waitReplica(t, started)
 	select {
 	case other := <-started:
@@ -268,10 +272,25 @@ func TestEnvtestReadDesireRunsOnlyOnLeader(t *testing.T) {
 	readTarget := seedReadDesire(t, cfg, store, partition, "read-target")
 
 	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(cancel)
 	results := make(chan error, 3)
 	var failures [3]atomic.Bool
 	var lists [3]atomic.Int32
+	// Cancel before draining, and drain only the replicas that actually
+	// started, in case setup fails partway through the loop below.
+	var startedReplicas int
+	t.Cleanup(func() {
+		cancel()
+		for range startedReplicas {
+			select {
+			case err := <-results:
+				if err != nil && !errors.Is(err, ErrLeadershipLost) {
+					t.Error(err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Error("replica failed to stop")
+			}
+		}
+	})
 	for i := range 3 {
 		clientConfig := rest.CopyConfig(cfg)
 		clientConfig.WrapTransport = func(rt http.RoundTripper) http.RoundTripper {
@@ -294,21 +313,9 @@ func TestEnvtestReadDesireRunsOnlyOnLeader(t *testing.T) {
 			t.Fatal(err)
 		}
 		fastElection(r)
+		startedReplicas++
 		go func() { results <- r.Start(ctx) }()
 	}
-	t.Cleanup(func() {
-		cancel()
-		for range 3 {
-			select {
-			case err := <-results:
-				if err != nil && !errors.Is(err, ErrLeadershipLost) {
-					t.Error(err)
-				}
-			case <-time.After(5 * time.Second):
-				t.Error("replica failed to stop")
-			}
-		}
-	})
 
 	leader := waitForLister(t, lists[:])
 	waitForReadSync(t, store, readTarget)
@@ -321,6 +328,12 @@ func TestEnvtestReadDesireRunsOnlyOnLeader(t *testing.T) {
 	// The leader loses its lease; a different replica must take over.
 	failures[leader].Store(true)
 	successor := waitForLister(t, lists[:], leader)
+	// Attribution guard: the replica that took over the ReadDesire work must
+	// hold the Lease, so standby activity in the failover window cannot pass
+	// as successor activity.
+	if holder := leaseHolder(t, cfg, partition); holder != fmt.Sprintf("replica-%d", successor) {
+		t.Fatalf("lease holder = %q, want the listed replica %d", holder, successor)
+	}
 
 	// The successor actively serves ReadDesire, not only holds the lease.
 	waitForReadSync(t, store, seedReadDesire(t, cfg, store, partition, "read-target-2"))
@@ -330,6 +343,23 @@ func TestEnvtestReadDesireRunsOnlyOnLeader(t *testing.T) {
 			t.Fatalf("standby replica %d ran ReadDesire", i)
 		}
 	}
+}
+
+// leaseHolder returns the current holder identity of the partition Lease.
+func leaseHolder(t *testing.T, cfg *rest.Config, partition string) string {
+	t.Helper()
+	client, err := coordination.NewForConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := client.Leases(testNamespace).Get(t.Context(), LeaseName(partition), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lease.Spec.HolderIdentity == nil {
+		t.Fatalf("lease %s has no holder", LeaseName(partition))
+	}
+	return *lease.Spec.HolderIdentity
 }
 
 // seedReadDesire creates the cluster object and the ReadDesire mirroring it.
