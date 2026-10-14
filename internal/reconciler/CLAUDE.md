@@ -10,6 +10,7 @@ flowchart TB
     serial["serial.Runnable"]
     read["readdesire.Controller"]
     refresher["discovery.Refresher"]
+    leader["leadership.Runnable"]
     runnable["reconciler.Runnable"]
     start["startRunnables"]
 
@@ -17,10 +18,16 @@ flowchart TB
     delete -->|"implements"| reconcilable
     reconcilable -->|"serial.New stores them"| serial
 
-    serial -->|"implements"| runnable
-    read -->|"implements"| runnable
+    serial -->|"leader only"| leader
+    read -->|"leader only"| leader
+    leader -->|"implements"| runnable
     refresher -->|"implements"| runnable
     runnable -->|"Start"| start
 ```
 
-`serial.New` returns `*serial.Runnable`. `readdesire.New` returns `*Controller`. `discovery.New` returns `*Refresher`. All three implement `Runnable`, and `startRunnables` calls `Start` on each. `serial.Runnable.Start` then calls `RunOnce` on apply, then delete.
+`serial.New` returns `*serial.Runnable`. `readdesire.New` returns `*Controller`.
+Both implement `Runnable`, but `leadership.Runnable` starts them only after acquiring
+the management-cluster Lease. Losing the Lease cancels their contexts and waits for
+both to stop before returning an error, causing the service to exit.
+`startRunnables` starts the election wrapper and `discovery.Refresher` on every
+replica. `serial.Runnable.Start` calls `RunOnce` on apply, then delete.

@@ -213,7 +213,7 @@
         },
         "create": {
           "default": true,
-          "description": "Create RBAC resources (ClusterRole, ClusterRoleBinding)",
+          "description": "Create reconciliation ClusterRole/ClusterRoleBinding and leader-election Role/RoleBinding",
           "title": "create",
           "type": "boolean"
         },
@@ -234,7 +234,7 @@
     },
     "replicaCount": {
       "default": 1,
-      "description": "Number of controller replicas to run",
+      "description": "Number of replicas; one leader reconciles and the others wait on standby",
       "title": "replicaCount",
       "type": "integer"
     },

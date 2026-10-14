@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/spf13/pflag"
@@ -23,6 +24,32 @@ type Config struct {
 	PollInterval             time.Duration `yaml:"poll_interval" mapstructure:"poll_interval"`
 	DiscoveryRefreshInterval time.Duration `yaml:"discovery_refresh_interval" mapstructure:"discovery_refresh_interval"`
 	DebugConfig              bool          `yaml:"debug_config,omitempty" mapstructure:"debug_config"`
+}
+
+// inClusterNamespaceFile is where Kubernetes projects the pod's own namespace
+// into the service-account volume of every pod.
+const inClusterNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+
+// ElectionNamespace returns the namespace holding the management-cluster
+// election Lease. POD_NAMESPACE wins when set; otherwise a pod uses its own
+// namespace from the service-account projection.
+func ElectionNamespace() (string, error) {
+	return resolveNamespace(os.ReadFile)
+}
+
+func resolveNamespace(readNamespaceFile func(string) ([]byte, error)) (string, error) {
+	if namespace := os.Getenv("POD_NAMESPACE"); namespace != "" {
+		return namespace, nil
+	}
+	if data, err := readNamespaceFile(inClusterNamespaceFile); err == nil {
+		if namespace := strings.TrimSpace(string(data)); namespace != "" {
+			return namespace, nil
+		}
+	}
+	return "", fmt.Errorf(
+		"leader election requires a namespace: set POD_NAMESPACE or run in a pod with %s projected",
+		inClusterNamespaceFile,
+	)
 }
 
 // LogConfig contains logging configuration.

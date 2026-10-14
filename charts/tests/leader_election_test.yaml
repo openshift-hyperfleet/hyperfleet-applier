@@ -1,0 +1,49 @@
+suite: Leader election
+templates:
+  - templates/leader-election-rbac.yaml
+set:
+  image.registry: quay.io
+  image.repository: openshift-hyperfleet/hyperfleet-applier
+  image.tag: test
+  config.managementCluster: test-cluster
+  config.redis.url: redis://redis:6379
+  rbac.allowlist:
+    - apiGroups: [""]
+      resources: ["configmaps"]
+release:
+  namespace: hyperfleet
+tests:
+  - it: grants only Lease operations in the pod namespace
+    template: templates/leader-election-rbac.yaml
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: Role
+      - equal:
+          path: metadata.namespace
+          value: hyperfleet
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["coordination.k8s.io"]
+              resources: ["leases"]
+              verbs: ["get", "create", "update"]
+  - it: binds the release service account
+    template: templates/leader-election-rbac.yaml
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: RoleBinding
+      - equal:
+          path: subjects[0].namespace
+          value: hyperfleet
+      - equal:
+          path: roleRef.kind
+          value: Role
+  - it: omits election RBAC when externally managed
+    template: templates/leader-election-rbac.yaml
+    set:
+      rbac.create: false
+    asserts:
+      - hasDocuments:
+          count: 0

@@ -33,6 +33,11 @@ The binary follows the same command and configuration conventions as the other H
 make run
 ```
 
+Local runs are not in a pod, so the election namespace comes from
+`POD_NAMESPACE`; the Makefile defaults it to `hyperfleet`. Override it with
+`make run POD_NAMESPACE=<namespace>` — the namespace must exist and the
+kubeconfig user needs `get`, `create`, and `update` on Leases there.
+
 Override the default configuration path with `make run CONFIG=/path/to/applier.yaml`. The shared
 Kubernetes discovery cache is invalidated using `discovery_refresh_interval`, allowing newly
 installed CRDs to be reconciled without restarting the applier. All three controllers use
@@ -46,6 +51,14 @@ Configuration precedence follows the HyperFleet convention: command-line flags, 
 `HYPERFLEET_*` environment variables, then YAML, then defaults. Use
 `bin/hyperfleet-applier config-dump --config configs/applier.yaml` to inspect the merged,
 redacted configuration.
+
+Leader election is always enabled. In Kubernetes, the applier uses its pod
+namespace from the service-account projection (`POD_NAMESPACE` overrides it);
+outside a pod, `POD_NAMESPACE` must be set (the Makefile's `run` target
+defaults it to `hyperfleet`), with permission to get/create/update Leases in
+that namespace. Only the leader reconciles desires.
+See [Replica model and leader election](charts/README.md#replica-model-and-leader-election)
+for timing, failover, and deployment constraints.
 
 ### Package layout
 

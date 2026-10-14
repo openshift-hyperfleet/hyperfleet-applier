@@ -11,6 +11,8 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/go-logr/logr"
+	"github.com/google/uuid"
 	hflog "github.com/openshift-hyperfleet/hyperfleet-logger"
 	redisclient "github.com/redis/go-redis/v9"
 	"github.com/spf13/cobra"
@@ -19,8 +21,11 @@ import (
 	k8sdiscovery "k8s.io/client-go/discovery"
 	discoverycache "k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/dynamic"
+	coordination "k8s.io/client-go/kubernetes/typed/coordination/v1"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/klog/v2"
 
 	"github.com/openshift-hyperfleet/hyperfleet-applier/internal/config"
 	"github.com/openshift-hyperfleet/hyperfleet-applier/internal/controllers/applydesire"
@@ -28,6 +33,7 @@ import (
 	"github.com/openshift-hyperfleet/hyperfleet-applier/internal/controllers/readdesire"
 	"github.com/openshift-hyperfleet/hyperfleet-applier/internal/controllers/serial"
 	"github.com/openshift-hyperfleet/hyperfleet-applier/internal/discovery"
+	"github.com/openshift-hyperfleet/hyperfleet-applier/internal/leadership"
 	"github.com/openshift-hyperfleet/hyperfleet-applier/internal/reconciler"
 	desireredis "github.com/openshift-hyperfleet/hyperfleet-applier/pkg/desire/store/redis"
 )
@@ -176,6 +182,10 @@ func initLogging(logConfig *config.LogConfig) error {
 		hflog.WithOutput(output),
 	)
 	slog.SetDefault(slog.New(handler))
+	// Route client-go's klog output (leader election, reflectors) through the
+	// same structured pipeline instead of klog's own stderr format, so lease
+	// renewal failures surface in the applier's log stream.
+	klog.SetLogger(logr.FromSlogHandler(handler))
 	return nil
 }
 
@@ -183,8 +193,20 @@ func initLogging(logConfig *config.LogConfig) error {
 func runServe(parent context.Context, cfg *config.Config) error {
 	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	namespace, err := config.ElectionNamespace()
+	if err != nil {
+		return err
+	}
+	restConfig, err := clientcmd.BuildConfigFromFlags("", cfg.Clients.Kubernetes.KubeConfigPath)
+	if err != nil {
+		return fmt.Errorf("build leader election client config: %w", err)
+	}
+	leaseClient, err := coordination.NewForConfig(restConfig)
+	if err != nil {
+		return fmt.Errorf("build leader election client: %w", err)
+	}
 
-	dyn, mapper, err := newKubernetesClients(cfg.Clients.Kubernetes.KubeConfigPath)
+	dyn, mapper, err := newKubernetesClients(restConfig)
 	if err != nil {
 		return err
 	}
@@ -197,15 +219,18 @@ func runServe(parent context.Context, cfg *config.Config) error {
 
 	pollInterval := cfg.PollInterval
 
-	runnables := []reconciler.Runnable{
-		discovery.New(mapper, cfg.DiscoveryRefreshInterval),
+	leader, err := leadership.New(leaseClient, namespace, cfg.ManagementCluster, uuid.NewString(),
 		serial.New(
 			pollInterval,
 			applydesire.New(store, store, dyn, mapper, cfg.ManagementCluster),
 			deletedesire.New(store, store, dyn, mapper, cfg.ManagementCluster),
 		),
 		readdesire.New(store, store, dyn, mapper, cfg.ManagementCluster, pollInterval),
+	)
+	if err != nil {
+		return err
 	}
+	runnables := []reconciler.Runnable{discovery.New(mapper, cfg.DiscoveryRefreshInterval), leader}
 
 	slog.InfoContext(ctx,
 		"starting HyperFleet Applier",
@@ -220,11 +245,7 @@ func runServe(parent context.Context, cfg *config.Config) error {
 	return err
 }
 
-func newKubernetesClients(kubeConfigPath string) (dynamic.Interface, meta.ResettableRESTMapper, error) {
-	restConfig, err := clientcmd.BuildConfigFromFlags("", kubeConfigPath)
-	if err != nil {
-		return nil, nil, fmt.Errorf("build Kubernetes client config: %w", err)
-	}
+func newKubernetesClients(restConfig *rest.Config) (dynamic.Interface, meta.ResettableRESTMapper, error) {
 	dyn, err := dynamic.NewForConfig(restConfig)
 	if err != nil {
 		return nil, nil, fmt.Errorf("build Kubernetes dynamic client: %w", err)

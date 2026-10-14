@@ -268,6 +268,9 @@ func (r *DeleteReconciler) executeDelete(
 	}
 
 	// No deletion timestamp yet - issue the delete call.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return desire.Status{}, ctxErr
+	}
 	deleteCtx, deleteCancel := context.WithTimeout(ctx, r.timeout)
 	defer deleteCancel()
 

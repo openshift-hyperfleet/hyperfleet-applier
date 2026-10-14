@@ -36,6 +36,8 @@ obvious from that listing:
     DeleteDesires. See `internal/controllers/deletedesire/CLAUDE.md`.
   - `serial` — `Runnable`, which calls `RunOnce` on each `reconciler.Reconcilable` in order.
     The applier passes apply, then delete. Read stays a separate `Runnable`.
+    Both run only on the management-cluster Lease leader (`internal/leadership`);
+    discovery refresh runs on every replica.
   - `readdesire` — the informer-driven `Controller` that mirrors live Kubernetes object state back
     into ReadDesire status. See `internal/controllers/readdesire/CLAUDE.md`.
   - `util` — shared helpers (`WithCondition`, `Equal`, `DescribeIdentity`) reused across the

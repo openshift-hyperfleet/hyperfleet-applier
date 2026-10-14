@@ -18,7 +18,7 @@ HyperFleet Applier - Kubernetes controller for reconciling ApplyDesire and Delet
 | serviceAccount.create | bool | `true` | Create a service account for the controller |
 | serviceAccount.annotations | object | `{}` | Annotations to add to the service account |
 | serviceAccount.name | string | `""` | Override the service account name |
-| rbac.create | bool | `true` | Create RBAC resources (ClusterRole, ClusterRoleBinding) |
+| rbac.create | bool | `true` | Create reconciliation ClusterRole/ClusterRoleBinding and leader-election Role/RoleBinding |
 | rbac.allowlist | list | `[]` | Explicit allowlist of API group + resource pairs the applier's ServiceAccount may manage on this cluster. Each entry must specify `apiGroups` and `resources`; verbs (get, list, watch, create, patch, delete) are added automatically by the template. Do NOT add a "*" apiGroup or resource here -- see rbac.devModeWildcard for the (off-by-default) escape hatch. This list must be tailored per Helm release/management cluster; see "Deriving the RBAC allowlist" in the chart README for how to compute it. |
 | rbac.devModeWildcard | bool | `false` | DANGER: replaces rbac.allowlist with a cluster-wide "*"/"*" ClusterRole rule when true. This disables the allowlist entirely and grants unrestricted access to every resource type in the cluster. NEVER enable this in a shared, staging, or production cluster; add the required resource types to rbac.allowlist instead. Default: false (must be explicitly opted into). |
 | podAnnotations | object | `{}` | Annotations to add to controller pods |
@@ -26,7 +26,7 @@ HyperFleet Applier - Kubernetes controller for reconciling ApplyDesire and Delet
 | podSecurityContext | object | `{"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}}` | Pod-level security context |
 | securityContext | object | `{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true,"runAsNonRoot":true}` | Container-level security context |
 | resources | object | `{"limits":{"cpu":"500m","memory":"512Mi"},"requests":{"cpu":"100m","memory":"128Mi"}}` | Resource requests and limits for the controller container |
-| replicaCount | int | `1` | Number of controller replicas to run |
+| replicaCount | int | `1` | Number of replicas; one leader reconciles and the others wait on standby |
 | image.registry | string | `""` | Container image registry (required) |
 | image.repository | string | `""` | Container image repository (required) |
 | image.tag | string | `""` | Container image tag (required) |
@@ -40,6 +40,43 @@ HyperFleet Applier - Kubernetes controller for reconciling ApplyDesire and Delet
 | config.log.output | string | `"stdout"` | Log output destination ("stdout" or "stderr") |
 | config.kubeConfigPath | string | `""` |  |
 | configOverride | string | `""` | Raw config.yaml content that replaces the template-generated config.yaml configOverride must have the required values management_cluster, poll_interval, discovery_refresh_interval, and clients.redis.url when set, default values in config are ignored Example: --set-file configOverride=configs/applier.yaml |
+
+## Replica model and leader election
+
+Leader election is always enabled, including with `replicaCount: 1`. Only the
+leader runs the serial apply-then-delete loop and the ReadDesire controller.
+Standby replicas refresh discovery but do not reconcile desires. This also
+protects overlapping pods during rolling updates; extra replicas provide
+availability, not additional reconciliation throughput.
+
+The Lease name is a SHA-256 hash of `management_cluster`, prefixed with
+`hyperfleet-applier-`. Its namespace is the pod's own: `POD_NAMESPACE` wins
+when set, otherwise the applier reads the namespace Kubernetes projects into
+the service-account volume. All replicas and releases managing the same
+partition must resolve to the same namespace with the same management-cluster
+identifier.
+
+The Lease duration is 120 seconds, renewal deadline 60 seconds, and retry period
+10 seconds. The 60-second gap exceeds the existing 30-second SSA and DELETE
+timeouts. On renewal failure, the leader cancels its controllers, waits for
+them to stop, and exits. The Lease is not released early, including on graceful
+shutdown, so takeover waits for expiration and a subsequent acquisition retry.
+Failure detection and scheduling can add delay; 120 seconds is not a strict
+end-to-end failover bound. A new leader starts reconciliation immediately.
+
+Lease election is not fencing against arbitrary process pauses: cancellation
+prevents subsequent writes but cannot undo a request already accepted by the
+API server. The timeout margin assumes responsive processes and bounded calls.
+
+The chart creates a namespaced Role/RoleBinding granting `get`, `create`, and
+`update` on Leases, independently of the reconciliation allowlist. With
+`rbac.create: false`, provision these permissions yourself.
+
+The election namespace is the pod's own namespace — there is no dedicated
+configuration for it; `POD_NAMESPACE` is the only override. Outside a pod
+(local execution), set `POD_NAMESPACE` yourself; the applier needs `get`,
+`create`, and `update` on Leases in that namespace. Missing both
+`POD_NAMESPACE` and the projected namespace file is a startup error.
 
 ## Deriving the RBAC allowlist
 

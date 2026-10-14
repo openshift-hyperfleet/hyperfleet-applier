@@ -54,7 +54,7 @@ rbac:
   # type: boolean
   # required: true
   # @schema
-  # -- Create RBAC resources (ClusterRole, ClusterRoleBinding)
+  # -- Create reconciliation ClusterRole/ClusterRoleBinding and leader-election Role/RoleBinding
   create: true
   # @schema
   # type: array
@@ -190,7 +190,7 @@ resources:
 # type: integer
 # required: true
 # @schema
-# -- Number of controller replicas to run
+# -- Number of replicas; one leader reconciles and the others wait on standby
 replicaCount: 1
 
 # @schema

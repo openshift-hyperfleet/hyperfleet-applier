@@ -6,6 +6,43 @@
 {{ template "chart.maintainersSection" . }}
 {{ template "chart.valuesSection" . }}
 
+## Replica model and leader election
+
+Leader election is always enabled, including with `replicaCount: 1`. Only the
+leader runs the serial apply-then-delete loop and the ReadDesire controller.
+Standby replicas refresh discovery but do not reconcile desires. This also
+protects overlapping pods during rolling updates; extra replicas provide
+availability, not additional reconciliation throughput.
+
+The Lease name is a SHA-256 hash of `management_cluster`, prefixed with
+`hyperfleet-applier-`. Its namespace is the pod's own: `POD_NAMESPACE` wins
+when set, otherwise the applier reads the namespace Kubernetes projects into
+the service-account volume. All replicas and releases managing the same
+partition must resolve to the same namespace with the same management-cluster
+identifier.
+
+The Lease duration is 120 seconds, renewal deadline 60 seconds, and retry period
+10 seconds. The 60-second gap exceeds the existing 30-second SSA and DELETE
+timeouts. On renewal failure, the leader cancels its controllers, waits for
+them to stop, and exits. The Lease is not released early, including on graceful
+shutdown, so takeover waits for expiration and a subsequent acquisition retry.
+Failure detection and scheduling can add delay; 120 seconds is not a strict
+end-to-end failover bound. A new leader starts reconciliation immediately.
+
+Lease election is not fencing against arbitrary process pauses: cancellation
+prevents subsequent writes but cannot undo a request already accepted by the
+API server. The timeout margin assumes responsive processes and bounded calls.
+
+The chart creates a namespaced Role/RoleBinding granting `get`, `create`, and
+`update` on Leases, independently of the reconciliation allowlist. With
+`rbac.create: false`, provision these permissions yourself.
+
+The election namespace is the pod's own namespace — there is no dedicated
+configuration for it; `POD_NAMESPACE` is the only override. Outside a pod
+(local execution), set `POD_NAMESPACE` yourself; the applier needs `get`,
+`create`, and `update` on Leases in that namespace. Missing both
+`POD_NAMESPACE` and the projected namespace file is a startup error.
+
 ## Deriving the RBAC allowlist
 
 The chart's `rbac.allowlist` must list every API group + resource pair

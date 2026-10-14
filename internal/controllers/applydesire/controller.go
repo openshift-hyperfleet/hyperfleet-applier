@@ -197,6 +197,9 @@ func (r *ApplyReconciler) applyToCluster(ctx context.Context, d desire.ApplyDesi
 		)
 	}
 
+	if err := ctx.Err(); err != nil {
+		return desire.Status{}, fmt.Errorf("apply %s: %w", util.DescribeIdentity(d.Identity), err)
+	}
 	applyCtx, cancel := context.WithTimeout(ctx, r.applyTimeout)
 	defer cancel()
 	if _, err := resourceClient.Apply(applyCtx, d.Identity.Name, obj, metav1.ApplyOptions{

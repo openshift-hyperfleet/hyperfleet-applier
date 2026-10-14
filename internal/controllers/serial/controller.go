@@ -12,8 +12,9 @@ import (
 
 // Runnable calls reconcilers serially and implements reconciler.Runnable.
 // The applier passes apply, then delete, so an apply cannot land after a
-// delete of the same target in the same tick. The read controller stays a
-// separate reconciler.Runnable.
+// delete of the same target in the same tick. This requires exactly one active
+// loop per management cluster, enforced by leader election across replicas.
+// The read controller stays a separate reconciler.Runnable behind the same Lease.
 type Runnable struct {
 	reconcilers []reconciler.Reconcilable
 	interval    time.Duration
@@ -34,6 +35,9 @@ func (r *Runnable) Start(ctx context.Context) error {
 
 	for {
 		for _, rec := range r.reconcilers {
+			if ctx.Err() != nil {
+				return nil
+			}
 			if err := rec.RunOnce(ctx); err != nil {
 				if ctx.Err() != nil {
 					return nil

@@ -23,6 +23,9 @@ GOFIPS140 ?= off
 
 CONFIG ?= configs/applier.yaml
 KUBE_CONFIG_PATH ?= $(if $(KUBECONFIG),$(KUBECONFIG),$(HOME)/.kube/config)
+# Namespace for the leader-election Lease in local runs. In pods the
+# service-account projection supplies it unless POD_NAMESPACE is set.
+POD_NAMESPACE ?= hyperfleet
 
 # Go tool info
 
@@ -57,7 +60,7 @@ build: ## Build the applier binary
 
 .PHONY: run
 run: build ## Run the applier service
-	./$(BINARY_PATH) serve \
+	POD_NAMESPACE="$(POD_NAMESPACE)" ./$(BINARY_PATH) serve \
 		--config "$(CONFIG)" \
 		--kubernetes-kube-config-path "$(KUBE_CONFIG_PATH)"
 
