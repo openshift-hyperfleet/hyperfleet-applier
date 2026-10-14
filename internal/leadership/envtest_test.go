@@ -56,6 +56,14 @@ func (r electionTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 }
 
 func TestEnvtestThreeReplicasFailover(t *testing.T) {
+	cfg := startEnvtest(t)
+	t.Run("renewal failure", func(t *testing.T) { testEnvtestFailover(t, cfg, true) })
+	t.Run("leader shutdown", func(t *testing.T) { testEnvtestFailover(t, cfg, false) })
+}
+
+// startEnvtest boots a private apiserver for the test and stops it on cleanup.
+func startEnvtest(t *testing.T) *rest.Config {
+	t.Helper()
 	environment := &envtest.Environment{}
 	cfg, err := environment.Start()
 	if err != nil {
@@ -66,8 +74,53 @@ func TestEnvtestThreeReplicasFailover(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	t.Run("renewal failure", func(t *testing.T) { testEnvtestFailover(t, cfg, true) })
-	t.Run("leader shutdown", func(t *testing.T) { testEnvtestFailover(t, cfg, false) })
+	return cfg
+}
+
+// replicaClients builds the Lease and dynamic clients for one replica,
+// wrapping its transport so cluster traffic can be attributed to the replica
+// and Lease requests can be failed on demand.
+func replicaClients(
+	t *testing.T, cfg *rest.Config, transport electionTransport,
+) (coordination.CoordinationV1Interface, dynamic.Interface) {
+	t.Helper()
+	clientConfig := rest.CopyConfig(cfg)
+	clientConfig.WrapTransport = func(rt http.RoundTripper) http.RoundTripper {
+		transport.RoundTripper = rt
+		return transport
+	}
+	leaseClient, err := coordination.NewForConfig(clientConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dyn, err := dynamic.NewForConfig(clientConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return leaseClient, dyn
+}
+
+// trackReplicas registers the cleanup that cancels the replicas and drains
+// the results of only those that actually started, so a mid-loop setup
+// failure still shuts down and waits for the launched goroutines. It returns
+// the function to call once per started replica.
+func trackReplicas(t *testing.T, cancel context.CancelFunc, results chan error) func() {
+	t.Helper()
+	var started int
+	t.Cleanup(func() {
+		cancel()
+		for range started {
+			select {
+			case err := <-results:
+				if err != nil && !errors.Is(err, ErrLeadershipLost) {
+					t.Error(err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Error("replica failed to stop")
+			}
+		}
+	})
+	return func() { started++ }
 }
 
 func testEnvtestFailover(t *testing.T, cfg *rest.Config, failRenewal bool) {
@@ -89,35 +142,10 @@ func testEnvtestFailover(t *testing.T, cfg *rest.Config, failRenewal bool) {
 	var failures [3]atomic.Bool
 	var writes [3]atomic.Int32
 	var stopReplica [3]context.CancelFunc
-	// Cancel before draining, and drain only the replicas that actually
-	// started, in case setup fails partway through the loop below.
-	var startedReplicas int
-	t.Cleanup(func() {
-		cancel()
-		for range startedReplicas {
-			select {
-			case err := <-results:
-				if err != nil && !errors.Is(err, ErrLeadershipLost) {
-					t.Error(err)
-				}
-			case <-time.After(5 * time.Second):
-				t.Error("replica failed to stop")
-			}
-		}
-	})
+	replicaStarted := trackReplicas(t, cancel, results)
 	for i := range 3 {
-		clientConfig := rest.CopyConfig(cfg)
-		clientConfig.WrapTransport = func(rt http.RoundTripper) http.RoundTripper {
-			return electionTransport{RoundTripper: rt, fail: &failures[i], writes: &writes[i]}
-		}
-		leaseClient, err := coordination.NewForConfig(clientConfig)
-		if err != nil {
-			t.Fatal(err)
-		}
-		dyn, err := dynamic.NewForConfig(clientConfig)
-		if err != nil {
-			t.Fatal(err)
-		}
+		leaseClient, dyn := replicaClients(t, cfg,
+			electionTransport{fail: &failures[i], writes: &writes[i]})
 		loop := serial.New(50*time.Millisecond,
 			applydesire.New(store, store, dyn, mapper, partition),
 			deletedesire.New(store, store, dyn, mapper, partition))
@@ -137,7 +165,7 @@ func testEnvtestFailover(t *testing.T, cfg *rest.Config, failRenewal bool) {
 			t.Fatal(err)
 		}
 		fastElection(r)
-		startedReplicas++
+		replicaStarted()
 		replicaCtx, stop := context.WithCancel(ctx)
 		stopReplica[i] = stop
 		go func() { results <- r.Start(replicaCtx) }()
@@ -249,16 +277,7 @@ func (*resettableMapper) Reset() {}
 // runServe - serial and readdesire behind the Lease - to pin that ReadDesire
 // informers run only on the lease holder, including across a failover.
 func TestEnvtestReadDesireRunsOnlyOnLeader(t *testing.T) {
-	environment := &envtest.Environment{}
-	cfg, err := environment.Start()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := environment.Stop(); err != nil {
-			t.Error(err)
-		}
-	})
+	cfg := startEnvtest(t)
 
 	const partition = "read-partition"
 	store := memory.New()
@@ -275,35 +294,10 @@ func TestEnvtestReadDesireRunsOnlyOnLeader(t *testing.T) {
 	results := make(chan error, 3)
 	var failures [3]atomic.Bool
 	var lists [3]atomic.Int32
-	// Cancel before draining, and drain only the replicas that actually
-	// started, in case setup fails partway through the loop below.
-	var startedReplicas int
-	t.Cleanup(func() {
-		cancel()
-		for range startedReplicas {
-			select {
-			case err := <-results:
-				if err != nil && !errors.Is(err, ErrLeadershipLost) {
-					t.Error(err)
-				}
-			case <-time.After(5 * time.Second):
-				t.Error("replica failed to stop")
-			}
-		}
-	})
+	replicaStarted := trackReplicas(t, cancel, results)
 	for i := range 3 {
-		clientConfig := rest.CopyConfig(cfg)
-		clientConfig.WrapTransport = func(rt http.RoundTripper) http.RoundTripper {
-			return electionTransport{RoundTripper: rt, fail: &failures[i], lists: &lists[i]}
-		}
-		leaseClient, err := coordination.NewForConfig(clientConfig)
-		if err != nil {
-			t.Fatal(err)
-		}
-		dyn, err := dynamic.NewForConfig(clientConfig)
-		if err != nil {
-			t.Fatal(err)
-		}
+		leaseClient, dyn := replicaClients(t, cfg,
+			electionTransport{fail: &failures[i], lists: &lists[i]})
 		r, err := New(leaseClient, testNamespace, partition, fmt.Sprintf("replica-%d", i),
 			serial.New(time.Hour,
 				applydesire.New(store, store, dyn, mapper, partition),
@@ -313,7 +307,7 @@ func TestEnvtestReadDesireRunsOnlyOnLeader(t *testing.T) {
 			t.Fatal(err)
 		}
 		fastElection(r)
-		startedReplicas++
+		replicaStarted()
 		go func() { results <- r.Start(ctx) }()
 	}
 
