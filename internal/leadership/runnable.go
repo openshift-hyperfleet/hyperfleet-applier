@@ -1,4 +1,15 @@
 // Package leadership gates reconciliation behind a management-cluster Lease.
+//
+// Besides the context-based stop, every SSA and DELETE issued by the
+// controllers is gated on Lease freshness: the leader's last successful Lease
+// write must be younger than LeaseDuration minus one RetryPeriod. A leader
+// that stalls past the Lease duration and resumes (SIGSTOP, VM freeze, heavy
+// throttling) would otherwise keep writing alongside the new leader for up to
+// RenewDeadline, because client-go only cancels the leader context when the
+// renew poll exhausts its full RenewDeadline - possibly a fresh one started
+// right after the resume. When the gate goes stale it cancels the
+// controllers' run context, so the process exits as it does on renewal
+// failure.
 package leadership
 
 import (
@@ -7,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -39,6 +51,7 @@ func LeaseName(managementCluster string) string {
 // Runnable starts its controllers only while holding the Lease. It is single-use.
 type Runnable struct {
 	config    leaderelection.LeaderElectionConfig
+	lock      *trackingLock
 	runnables []reconciler.Runnable
 }
 
@@ -49,17 +62,19 @@ func New(client coordination.CoordinationV1Interface, namespace, managementClust
 	if namespace == "" || managementCluster == "" || identity == "" {
 		return nil, errors.New("leader election requires namespace, management cluster and identity")
 	}
+	lock := &trackingLock{Interface: &resourcelock.LeaseLock{
+		LeaseMeta:  metav1.ObjectMeta{Namespace: namespace, Name: LeaseName(managementCluster)},
+		Client:     client,
+		LockConfig: resourcelock.ResourceLockConfig{Identity: identity},
+	}}
 	return &Runnable{
 		config: leaderelection.LeaderElectionConfig{
-			Lock: &resourcelock.LeaseLock{
-				LeaseMeta:  metav1.ObjectMeta{Namespace: namespace, Name: LeaseName(managementCluster)},
-				Client:     client,
-				LockConfig: resourcelock.ResourceLockConfig{Identity: identity},
-			},
+			Lock:          lock,
 			LeaseDuration: LeaseDuration, RenewDeadline: RenewDeadline, RetryPeriod: RetryPeriod,
 			ReleaseOnCancel: false,
 			Name:            "hyperfleet-applier",
 		},
+		lock:      lock,
 		runnables: runnables,
 	}, nil
 }
@@ -72,6 +87,16 @@ func (r *Runnable) Start(ctx context.Context) error {
 	var acquired atomic.Bool
 	finished := make(chan error, 1)
 	cfg := r.config
+	// Lease freshness: while the last successful renewal is younger than
+	// LeaseDuration minus one retry period, no standby could have acquired
+	// (they only take an expired Lease), so writes are safe. The retry-period
+	// margin covers clock discrepancy between this process's monotonic
+	// measurement and the standby's judgement of the Lease record.
+	gate := &staleGate{
+		lock:          r.lock,
+		bound:         cfg.LeaseDuration - cfg.RetryPeriod,
+		watchInterval: cfg.RetryPeriod,
+	}
 	cfg.Callbacks = leaderelection.LeaderCallbacks{
 		OnNewLeader: func(identity string) {
 			// Runs synchronously in the elector loop before Run returns, so the
@@ -84,7 +109,7 @@ func (r *Runnable) Start(ctx context.Context) error {
 		},
 		OnStartedLeading: func(leaderCtx context.Context) {
 			slog.InfoContext(leaderCtx, "acquired management-cluster leadership", "lease", cfg.Lock.Describe())
-			finished <- runControllers(leaderCtx, cancel, r.runnables)
+			finished <- runControllers(leaderCtx, cancel, gate, r.runnables)
 		},
 		OnStoppedLeading: func() {},
 	}
@@ -109,9 +134,32 @@ func (r *Runnable) Start(ctx context.Context) error {
 	return ErrLeadershipLost
 }
 
-func runControllers(ctx context.Context, stopElection context.CancelFunc, runnables []reconciler.Runnable) error {
+func runControllers(ctx context.Context, stopElection context.CancelFunc, gate *staleGate,
+	runnables []reconciler.Runnable,
+) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	gate.cancel = cancel
+	runCtx = reconciler.WithLeaderGate(runCtx, gate)
+	// Stop the controllers promptly once the Lease goes stale even when no
+	// write is attempted; the per-write gates keep every SSA and DELETE off
+	// the wire in the meantime.
+	watchDone := make(chan struct{})
+	go func() {
+		defer close(watchDone)
+		ticker := time.NewTicker(gate.watchInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-runCtx.Done():
+				return
+			case <-ticker.C:
+				if gate.CanWrite() != nil {
+					return
+				}
+			}
+		}
+	}()
 	errs := make(chan error, len(runnables))
 	var wg sync.WaitGroup
 	for _, runnable := range runnables {
@@ -124,10 +172,91 @@ func runControllers(ctx context.Context, stopElection context.CancelFunc, runnab
 		})
 	}
 	wg.Wait()
+	cancel()
+	<-watchDone
 	close(errs)
 	var result []error
 	for err := range errs {
 		result = append(result, err)
 	}
 	return errors.Join(result...)
+}
+
+// trackingLock records the time of each successful Lease write so the
+// controllers can refuse cluster writes once the last renewal goes stale.
+// It wraps the lock the elector uses, so Create and Update succeed exactly
+// when the elector's acquisition or renewal did.
+type trackingLock struct {
+	resourcelock.Interface
+	lastSuccess time.Time
+	mu          sync.Mutex
+}
+
+func (l *trackingLock) Create(ctx context.Context, ler resourcelock.LeaderElectionRecord) error {
+	if err := l.Interface.Create(ctx, ler); err != nil {
+		return err
+	}
+	l.markSuccess()
+	return nil
+}
+
+func (l *trackingLock) Update(ctx context.Context, ler resourcelock.LeaderElectionRecord) error {
+	if err := l.Interface.Update(ctx, ler); err != nil {
+		return err
+	}
+	l.markSuccess()
+	return nil
+}
+
+func (l *trackingLock) markSuccess() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lastSuccess = time.Now()
+}
+
+// sinceLastSuccess reports how long ago the last successful Lease write
+// happened. A never-successful lock reads as infinitely stale.
+func (l *trackingLock) sinceLastSuccess() time.Duration {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.lastSuccess.IsZero() {
+		return time.Duration(math.MaxInt64)
+	}
+	return time.Since(l.lastSuccess)
+}
+
+// backdateLastSuccess moves the recorded success into the past; tests use it
+// to simulate a process that stalled after renewing.
+func (l *trackingLock) backdateLastSuccess(age time.Duration) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lastSuccess = time.Now().Add(-age)
+}
+
+// staleGate implements reconciler.LeaderGate on top of the tracking lock.
+// While the last successful renewal is younger than bound, no standby could
+// have acquired the Lease, so cluster writes are safe. Once it is older, the
+// Lease may have been taken over even though the elector's renew poll is
+// still inside its RenewDeadline (a stalled-and-resumed leader), so writes
+// are denied and the controllers' run context is canceled to exit the
+// process as renewal failure does.
+type staleGate struct {
+	lock          *trackingLock
+	cancel        context.CancelFunc
+	bound         time.Duration
+	watchInterval time.Duration
+}
+
+// CanWrite implements reconciler.LeaderGate.
+func (g *staleGate) CanWrite() error {
+	if age := g.lock.sinceLastSuccess(); age > g.bound {
+		if g.cancel != nil {
+			g.cancel()
+		}
+		return fmt.Errorf(
+			"%w: last successful renewal %s ago, freshness bound %s",
+			reconciler.ErrLeadershipStale, age.Truncate(time.Millisecond), g.bound,
+		)
+	}
+	return nil
 }

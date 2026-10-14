@@ -18,6 +18,7 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	"github.com/openshift-hyperfleet/hyperfleet-applier/internal/controllers/util"
+	"github.com/openshift-hyperfleet/hyperfleet-applier/internal/reconciler"
 	"github.com/openshift-hyperfleet/hyperfleet-applier/pkg/desire"
 )
 
@@ -88,9 +89,12 @@ func (r *ApplyReconciler) RunOnce(ctx context.Context) error {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return fmt.Errorf("apply: reconcile aborted for management cluster %q: %w", r.managementCluster, ctxErr)
 		}
-		// Handles deadlineExceeded and context canceled
+		// Handles deadlineExceeded, context canceled, and stale leadership.
+		// The stale gate cancels the run context too, but classifying the
+		// error here aborts the pass without logging a failure per desire.
 		if reconcileErr := r.reconcileOne(ctx, d); reconcileErr != nil {
-			if errors.Is(reconcileErr, context.Canceled) || errors.Is(reconcileErr, context.DeadlineExceeded) {
+			if errors.Is(reconcileErr, context.Canceled) || errors.Is(reconcileErr, context.DeadlineExceeded) ||
+				errors.Is(reconcileErr, reconciler.ErrLeadershipStale) {
 				return fmt.Errorf(
 					"apply: reconcile desire %s: %w",
 					util.DescribeIdentity(d.Identity), reconcileErr,
@@ -198,6 +202,11 @@ func (r *ApplyReconciler) applyToCluster(ctx context.Context, d desire.ApplyDesi
 	}
 
 	if err := ctx.Err(); err != nil {
+		return desire.Status{}, fmt.Errorf("apply %s: %w", util.DescribeIdentity(d.Identity), err)
+	}
+	// Lease freshness: a stalled-and-resumed leader must not issue SSA even
+	// though its context is not canceled yet (HYPERFLEET-1777).
+	if err := reconciler.CanWrite(ctx); err != nil {
 		return desire.Status{}, fmt.Errorf("apply %s: %w", util.DescribeIdentity(d.Identity), err)
 	}
 	applyCtx, cancel := context.WithTimeout(ctx, r.applyTimeout)

@@ -20,6 +20,7 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	"github.com/openshift-hyperfleet/hyperfleet-applier/internal/controllers/util"
+	"github.com/openshift-hyperfleet/hyperfleet-applier/internal/reconciler"
 	"github.com/openshift-hyperfleet/hyperfleet-applier/pkg/desire"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
@@ -270,6 +271,13 @@ func (r *DeleteReconciler) executeDelete(
 	// No deletion timestamp yet - issue the delete call.
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return desire.Status{}, ctxErr
+	}
+	// Lease freshness: a stalled-and-resumed leader must not issue DELETE
+	// even though its context is not canceled yet (HYPERFLEET-1777). The
+	// gate cancels the run context on denial, so the RunOnce pass aborts
+	// through the ctx.Err() classification above.
+	if gateErr := reconciler.CanWrite(ctx); gateErr != nil {
+		return desire.Status{}, fmt.Errorf("delete %s: %w", util.DescribeIdentity(d.Identity), gateErr)
 	}
 	deleteCtx, deleteCancel := context.WithTimeout(ctx, r.timeout)
 	defer deleteCancel()
