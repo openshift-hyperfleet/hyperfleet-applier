@@ -3,6 +3,7 @@ package reconciler
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // ErrLeadershipStale is returned by a LeaderGate when the caller may no
@@ -16,6 +17,10 @@ var ErrLeadershipStale = errors.New("leader election renewal is stale")
 // controllers without a gate (unit tests, standalone use) always may.
 type LeaderGate interface {
 	CanWrite() error
+	// Remaining reports how much of the write window is left: the time
+	// until the last successful Lease renewal ages past the freshness
+	// bound. It is zero or negative once the window has passed.
+	Remaining() time.Duration
 }
 
 type leaderGateKey struct{}
@@ -34,4 +39,20 @@ func CanWrite(ctx context.Context) error {
 		return gate.CanWrite()
 	}
 	return nil
+}
+
+// WriteContext derives a write context from ctx with the given timeout,
+// capped by the write window left on the gate in ctx, if any. The cap
+// anchors the deadline to the last successful Lease renewal, so a process
+// paused between the gate check and the request resumes to an expired
+// write context instead of sending the request after the freshness bound,
+// and a request already in flight is aborted at that same point. Contexts
+// without a gate keep the full timeout.
+func WriteContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if gate, ok := ctx.Value(leaderGateKey{}).(LeaderGate); ok {
+		if remaining := gate.Remaining(); remaining < timeout {
+			return context.WithTimeout(ctx, remaining)
+		}
+	}
+	return context.WithTimeout(ctx, timeout)
 }

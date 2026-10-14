@@ -10,6 +10,13 @@
 // right after the resume. When the gate goes stale it cancels the
 // controllers' run context, so the process exits as it does on renewal
 // failure.
+//
+// The gate is both a check and a bound: each write context is capped at the
+// last successful renewal plus the freshness bound (reconciler.WriteContext),
+// so a process paused between the check and the request resumes to an
+// expired write context instead of sending it, and a request already in
+// flight is aborted at the bound. What no client-side mechanism can do is
+// undo a request the API server already accepted inside the window.
 package leadership
 
 import (
@@ -20,7 +27,6 @@ import (
 	"log/slog"
 	"math"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -50,9 +56,13 @@ func LeaseName(managementCluster string) string {
 
 // Runnable starts its controllers only while holding the Lease. It is single-use.
 type Runnable struct {
-	config    leaderelection.LeaderElectionConfig
-	lock      *trackingLock
-	runnables []reconciler.Runnable
+	lock *trackingLock
+	// onStartedLeadingDelay, when set, runs at the top of OnStartedLeading.
+	// Tests use it to reproduce the client-go goroutine starting that
+	// callback after Run has already returned; it is nil in production.
+	onStartedLeadingDelay func(ctx context.Context)
+	runnables             []reconciler.Runnable
+	config                leaderelection.LeaderElectionConfig
 }
 
 // New builds an elector; namespace and identity must be non-empty.
@@ -84,7 +94,6 @@ func New(client coordination.CoordinationV1Interface, namespace, managementClust
 func (r *Runnable) Start(ctx context.Context) error {
 	electionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	var acquired atomic.Bool
 	finished := make(chan error, 1)
 	cfg := r.config
 	// Lease freshness: while the last successful renewal is younger than
@@ -99,14 +108,9 @@ func (r *Runnable) Start(ctx context.Context) error {
 	}
 	cfg.Callbacks = leaderelection.LeaderCallbacks{
 		OnStartedLeading: func(leaderCtx context.Context) {
-			// Recorded before anything else: Start reads it after Run returns
-			// to decide whether finished will be sent. OnStartedLeading runs
-			// on a goroutine spawned by Run (as does OnNewLeader, which is
-			// why it cannot carry this flag); if the election context dies
-			// before this line executes, Start sees false, skips the drain,
-			// and the controllers exit on the canceled leader context with
-			// the buffered send unable to block.
-			acquired.Store(true)
+			if r.onStartedLeadingDelay != nil {
+				r.onStartedLeadingDelay(leaderCtx)
+			}
 			slog.InfoContext(leaderCtx, "acquired management-cluster leadership", "lease", cfg.Lock.Describe())
 			finished <- runControllers(leaderCtx, cancel, gate, r.runnables)
 		},
@@ -118,7 +122,13 @@ func (r *Runnable) Start(ctx context.Context) error {
 	}
 	elector.Run(electionCtx)
 	var controllerErr error
-	if acquired.Load() {
+	// The Lease write that recorded the acquisition ran synchronously in the
+	// elector goroutine, so it is settled before Run can return - unlike
+	// OnStartedLeading, which client-go starts on its own goroutine and may
+	// not have run a single statement yet. Whenever the Lease was written,
+	// finished is coming and must be drained before the caller closes
+	// anything the controllers use.
+	if r.lock.everSucceeded() {
 		controllerErr = <-finished
 	}
 	if ctx.Err() != nil {
@@ -241,6 +251,17 @@ func (l *trackingLock) sinceLastSuccess() time.Duration {
 	return time.Since(l.lastSuccess)
 }
 
+// everSucceeded reports whether the elector completed at least one Lease
+// write, i.e. it acquired the Lease. The write runs synchronously in the
+// elector goroutine, before Run can return, so Start can rely on it to
+// decide whether finished will be sent even when the OnStartedLeading
+// goroutine has not run yet.
+func (l *trackingLock) everSucceeded() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return !l.lastSuccess.IsZero()
+}
+
 // staleGate implements reconciler.LeaderGate on top of the tracking lock.
 // While the last successful renewal is younger than bound, no standby could
 // have acquired the Lease, so cluster writes are safe. Once it is older, the
@@ -267,4 +288,9 @@ func (g *staleGate) CanWrite() error {
 		)
 	}
 	return nil
+}
+
+// Remaining implements reconciler.LeaderGate.
+func (g *staleGate) Remaining() time.Duration {
+	return g.bound - g.lock.sinceLastSuccess()
 }

@@ -73,7 +73,10 @@ gives up - every SSA and DELETE call is additionally gated on lease
 freshness: the leader's last successful lease renewal must be younger than
 the lease duration minus one retry period. When it is not, the write is
 refused, the controllers' context is canceled, and the process exits exactly
-as it does on renewal failure.
+as it does on renewal failure. Each write context is also capped at the last
+successful renewal plus that bound, so a process paused between the check
+and the request resumes to an expired write context instead of sending it,
+and a request already in flight is aborted at the bound.
 
 The chart creates a namespaced Role/RoleBinding granting `get`, `create`, and
 `update` on Leases, independently of the reconciliation allowlist. With

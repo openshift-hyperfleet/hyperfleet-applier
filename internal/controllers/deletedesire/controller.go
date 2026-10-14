@@ -279,7 +279,10 @@ func (r *DeleteReconciler) executeDelete(
 	if gateErr := reconciler.CanWrite(ctx); gateErr != nil {
 		return desire.Status{}, fmt.Errorf("delete %s: %w", util.DescribeIdentity(d.Identity), gateErr)
 	}
-	deleteCtx, deleteCancel := context.WithTimeout(ctx, r.timeout)
+	// The write context is capped at the last successful renewal plus the
+	// freshness bound, so the request cannot be sent or stay in flight past
+	// that point even if the process pauses right after the check.
+	deleteCtx, deleteCancel := reconciler.WriteContext(ctx, r.timeout)
 	defer deleteCancel()
 
 	err = client.Delete(deleteCtx, d.Identity.Name, metav1.DeleteOptions{})
@@ -290,6 +293,12 @@ func (r *DeleteReconciler) executeDelete(
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return desire.Status{}, fmt.Errorf("delete %s: %w", util.DescribeIdentity(d.Identity), ctxErr)
+		}
+		// A request aborted by the freshness cap means leadership went stale
+		// between the gate check and the call: control flow, not a desire
+		// failure.
+		if gateErr := reconciler.CanWrite(ctx); gateErr != nil {
+			return desire.Status{}, fmt.Errorf("delete %s: %w", util.DescribeIdentity(d.Identity), gateErr)
 		}
 		return deleteFailed(d.Status, err), nil
 	}

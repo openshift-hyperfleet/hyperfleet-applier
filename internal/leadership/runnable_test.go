@@ -17,10 +17,12 @@ import (
 type funcRunnable func(context.Context) error
 
 const (
-	testNamespace     = "default"
-	configMapResource = "configmaps"
-	configMapKind     = "ConfigMap"
-	testOwner         = "test-owner"
+	testNamespace       = "default"
+	configMapResource   = "configmaps"
+	configMapKind       = "ConfigMap"
+	testOwner           = "test-owner"
+	testApplyTargetName = "target"
+	testDeleteTarget    = "delete-target"
 )
 
 func (f funcRunnable) Start(ctx context.Context) error { return f(ctx) }

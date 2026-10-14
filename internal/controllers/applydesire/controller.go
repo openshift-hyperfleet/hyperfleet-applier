@@ -209,7 +209,10 @@ func (r *ApplyReconciler) applyToCluster(ctx context.Context, d desire.ApplyDesi
 	if err := reconciler.CanWrite(ctx); err != nil {
 		return desire.Status{}, fmt.Errorf("apply %s: %w", util.DescribeIdentity(d.Identity), err)
 	}
-	applyCtx, cancel := context.WithTimeout(ctx, r.applyTimeout)
+	// The write context is capped at the last successful renewal plus the
+	// freshness bound, so the request cannot be sent or stay in flight past
+	// that point even if the process pauses right after the check.
+	applyCtx, cancel := reconciler.WriteContext(ctx, r.applyTimeout)
 	defer cancel()
 	if _, err := resourceClient.Apply(applyCtx, d.Identity.Name, obj, metav1.ApplyOptions{
 		FieldManager: fieldManager,
@@ -218,6 +221,12 @@ func (r *ApplyReconciler) applyToCluster(ctx context.Context, d desire.ApplyDesi
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			// Abort instead of recording shutdown as KubeAPIError.
 			return desire.Status{}, fmt.Errorf("apply %s: %w", util.DescribeIdentity(d.Identity), ctxErr)
+		}
+		// A request aborted by the freshness cap means leadership went stale
+		// between the gate check and the call: control flow, not a desire
+		// failure.
+		if gateErr := reconciler.CanWrite(ctx); gateErr != nil {
+			return desire.Status{}, fmt.Errorf("apply %s: %w", util.DescribeIdentity(d.Identity), gateErr)
 		}
 		return applyFailed(d.Status, d.Generation, err), nil
 	}
