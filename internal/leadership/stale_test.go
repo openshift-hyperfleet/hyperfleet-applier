@@ -17,6 +17,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/leaderelection/resourcelock"
 
 	"github.com/openshift-hyperfleet/hyperfleet-applier/internal/controllers/applydesire"
 	"github.com/openshift-hyperfleet/hyperfleet-applier/internal/controllers/deletedesire"
@@ -28,7 +29,7 @@ import (
 
 func TestStaleGateDeniesAndCancels(t *testing.T) {
 	lock := &trackingLock{}
-	lock.markSuccess()
+	lock.markSuccess(time.Now())
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	gate := &staleGate{lock: lock, bound: time.Minute, cancel: cancel}
@@ -237,6 +238,49 @@ func TestStaleLeadershipBlocksWritesInsideRenewDeadline(t *testing.T) {
 }
 
 func ptr(s string) *string { return &s }
+
+// delayedLock is a resourcelock whose Update succeeds only after a delay
+// longer than the caller's freshness bound, so the response is handled well
+// after the request was issued.
+type delayedLock struct {
+	updateDelay time.Duration
+}
+
+func (d *delayedLock) Get(context.Context) (*resourcelock.LeaderElectionRecord, []byte, error) {
+	return nil, nil, nil
+}
+
+func (d *delayedLock) Create(context.Context, resourcelock.LeaderElectionRecord) error {
+	return nil
+}
+
+func (d *delayedLock) Update(context.Context, resourcelock.LeaderElectionRecord) error {
+	time.Sleep(d.updateDelay)
+	return nil
+}
+
+func (d *delayedLock) RecordEvent(string) {}
+
+func (d *delayedLock) Identity() string { return "delayed" }
+
+func (d *delayedLock) Describe() string { return "delayed" }
+
+// TestTrackingLockRecordsRequestStart pins that a successful Lease write
+// counts from when the request was issued, not when its response was
+// handled. A renewal whose response straddles a process pause must not read
+// as fresh at the resume, or a Lease another replica took in the meantime
+// would pass the write gate.
+func TestTrackingLockRecordsRequestStart(t *testing.T) {
+	const bound = 50 * time.Millisecond
+	lock := &trackingLock{Interface: &delayedLock{updateDelay: 2 * bound}}
+	if err := lock.Update(t.Context(), resourcelock.LeaderElectionRecord{}); err != nil {
+		t.Fatal(err)
+	}
+	gateErr := (&staleGate{lock: lock, bound: bound}).CanWrite()
+	if !errors.Is(gateErr, reconciler.ErrLeadershipStale) {
+		t.Fatalf("CanWrite after a slow successful renewal = %v, want ErrLeadershipStale", gateErr)
+	}
+}
 
 // backdateLastSuccess moves the recorded success into the past to simulate
 // a process that stalled after renewing.

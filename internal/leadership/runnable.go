@@ -192,25 +192,37 @@ type trackingLock struct {
 }
 
 func (l *trackingLock) Create(ctx context.Context, ler resourcelock.LeaderElectionRecord) error {
+	// The issue time, not the response time, is the freshness point: the
+	// apiserver may commit a write long before a stalled process handles
+	// the response, and recording the response time would read a
+	// straddled renewal as fresh after a resume (HYPERFLEET-1777).
+	started := time.Now()
 	if err := l.Interface.Create(ctx, ler); err != nil {
 		return err
 	}
-	l.markSuccess()
+	l.markSuccess(started)
 	return nil
 }
 
 func (l *trackingLock) Update(ctx context.Context, ler resourcelock.LeaderElectionRecord) error {
+	started := time.Now()
 	if err := l.Interface.Update(ctx, ler); err != nil {
 		return err
 	}
-	l.markSuccess()
+	l.markSuccess(started)
 	return nil
 }
 
-func (l *trackingLock) markSuccess() {
+// markSuccess records at, the time a successful Lease write was issued,
+// never moving lastSuccess backward. Recording the issue time only ever
+// understates freshness by the call latency, which is conservative: the
+// gate may refuse writes slightly early, never late.
+func (l *trackingLock) markSuccess(at time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.lastSuccess = time.Now()
+	if at.After(l.lastSuccess) {
+		l.lastSuccess = at
+	}
 }
 
 // sinceLastSuccess reports how long ago the last successful Lease write
