@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/openshift-hyperfleet/hyperfleet-applier/internal/controllers/applydesire"
 	"github.com/openshift-hyperfleet/hyperfleet-applier/internal/controllers/deletedesire"
+	"github.com/openshift-hyperfleet/hyperfleet-applier/internal/controllers/readdesire"
 	"github.com/openshift-hyperfleet/hyperfleet-applier/internal/controllers/serial"
 	"github.com/openshift-hyperfleet/hyperfleet-applier/pkg/desire"
 	"github.com/openshift-hyperfleet/hyperfleet-applier/pkg/desire/store/memory"
@@ -33,6 +35,7 @@ type electionTransport struct {
 	http.RoundTripper
 	fail   *atomic.Bool
 	writes *atomic.Int32
+	lists  *atomic.Int32
 }
 
 func (r electionTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -40,8 +43,14 @@ func (r electionTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		return nil, errors.New("simulated Lease connectivity failure")
 	}
 	isWrite := req.Method == http.MethodPatch || req.Method == http.MethodDelete
-	if strings.Contains(req.URL.Path, "/configmaps") && isWrite {
+	if r.writes != nil && isWrite && strings.Contains(req.URL.Path, "/configmaps") {
 		r.writes.Add(1)
+	}
+	// Collection GETs are the ReadDesire informer's LIST/WATCH; apply and
+	// delete use single-object requests.
+	if r.lists != nil && req.Method == http.MethodGet &&
+		strings.HasSuffix(req.URL.Path, "/configmaps") {
+		r.lists.Add(1)
 	}
 	return r.RoundTripper.RoundTrip(req)
 }
@@ -221,4 +230,165 @@ func hasReason(status desire.Status, reason string) bool {
 		}
 	}
 	return false
+}
+
+// resettableMapper adapts a meta.RESTMapper to the meta.ResettableRESTMapper
+// readdesire requires. Reset is a no-op because the registered mappings never
+// change in these tests.
+type resettableMapper struct {
+	meta.RESTMapper
+}
+
+func (*resettableMapper) Reset() {}
+
+// TestEnvtestReadDesireRunsOnlyOnLeader uses the production wiring from
+// runServe - serial and readdesire behind the Lease - to pin that ReadDesire
+// informers run only on the lease holder, including across a failover.
+func TestEnvtestReadDesireRunsOnlyOnLeader(t *testing.T) {
+	environment := &envtest.Environment{}
+	cfg, err := environment.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := environment.Stop(); err != nil {
+			t.Error(err)
+		}
+	})
+
+	const partition = "read-partition"
+	store := memory.New()
+	base := meta.NewDefaultRESTMapper([]schema.GroupVersion{{Version: "v1"}})
+	base.AddSpecific(schema.GroupVersionKind{Version: "v1", Kind: configMapKind},
+		schema.GroupVersionResource{Version: "v1", Resource: configMapResource},
+		schema.GroupVersionResource{Version: "v1", Resource: "configmap"},
+		meta.RESTScopeNamespace)
+	mapper := &resettableMapper{RESTMapper: base}
+
+	readTarget := seedReadDesire(t, cfg, store, partition, "read-target")
+
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	results := make(chan error, 3)
+	var failures [3]atomic.Bool
+	var lists [3]atomic.Int32
+	for i := range 3 {
+		clientConfig := rest.CopyConfig(cfg)
+		clientConfig.WrapTransport = func(rt http.RoundTripper) http.RoundTripper {
+			return electionTransport{RoundTripper: rt, fail: &failures[i], lists: &lists[i]}
+		}
+		leaseClient, err := coordination.NewForConfig(clientConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dyn, err := dynamic.NewForConfig(clientConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, err := New(leaseClient, testNamespace, partition, fmt.Sprintf("replica-%d", i),
+			serial.New(time.Hour,
+				applydesire.New(store, store, dyn, mapper, partition),
+				deletedesire.New(store, store, dyn, mapper, partition)),
+			readdesire.New(store, store, dyn, mapper, partition, 50*time.Millisecond))
+		if err != nil {
+			t.Fatal(err)
+		}
+		fastElection(r)
+		go func() { results <- r.Start(ctx) }()
+	}
+	t.Cleanup(func() {
+		cancel()
+		for range 3 {
+			select {
+			case err := <-results:
+				if err != nil && !errors.Is(err, ErrLeadershipLost) {
+					t.Error(err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Error("replica failed to stop")
+			}
+		}
+	})
+
+	leader := waitForLister(t, lists[:])
+	waitForReadSync(t, store, readTarget)
+	for i := range lists {
+		if i != leader && lists[i].Load() != 0 {
+			t.Fatalf("replica %d ran ReadDesire before any failover; want only leader %d", i, leader)
+		}
+	}
+
+	// The leader loses its lease; a different replica must take over.
+	failures[leader].Store(true)
+	successor := waitForLister(t, lists[:], leader)
+
+	// The successor actively serves ReadDesire, not only holds the lease.
+	waitForReadSync(t, store, seedReadDesire(t, cfg, store, partition, "read-target-2"))
+
+	for i := range lists {
+		if i != leader && i != successor && lists[i].Load() != 0 {
+			t.Fatalf("standby replica %d ran ReadDesire", i)
+		}
+	}
+}
+
+// seedReadDesire creates the cluster object and the ReadDesire mirroring it.
+func seedReadDesire(
+	t *testing.T, cfg *rest.Config, store *memory.Store, partition, name string,
+) desire.Identity {
+	t.Helper()
+	dyn, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = dyn.Resource(schema.GroupVersionResource{Version: "v1", Resource: configMapResource}).
+		Namespace(testNamespace).Create(t.Context(), &unstructured.Unstructured{
+		Object: map[string]any{"apiVersion": "v1", "kind": configMapKind, "metadata": map[string]any{
+			"name": name, "namespace": testNamespace}},
+	}, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := desire.Identity{ManagementCluster: partition, Type: desire.TypeRead,
+		Resource: configMapResource, Namespace: testNamespace, Name: name}
+	if _, err := store.CreateReadDesire(t.Context(), desire.ReadDesire{
+		Identity: id, Owner: testOwner, TargetVersion: "v1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// waitForLister returns the first replica whose ReadDesire informer issued a
+// collection request, skipping the excluded replica numbers.
+func waitForLister(t *testing.T, lists []atomic.Int32, exclude ...int) int {
+	t.Helper()
+	deadline := time.Now().Add(8 * time.Second)
+	for {
+		for i := range lists {
+			if lists[i].Load() == 0 || slices.Contains(exclude, i) {
+				continue
+			}
+			return i
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for a replica to run ReadDesire")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func waitForReadSync(t *testing.T, store *memory.Store, id desire.Identity) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got, err := store.GetReadDesire(t.Context(), id)
+		if err == nil && hasReason(got.Status.Status, desire.ReasonSynced) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("ReadDesire %s did not reach %s; last status: %+v", id.Name, desire.ReasonSynced, got.Status)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
