@@ -105,8 +105,14 @@ func TestReleaseLeaseHandsOver(t *testing.T) {
 	if lease.Spec.LeaseDurationSeconds == nil || *lease.Spec.LeaseDurationSeconds != handOverLeaseDurationSeconds {
 		t.Fatalf("duration after hand-over = %v, want %d", lease.Spec.LeaseDurationSeconds, handOverLeaseDurationSeconds)
 	}
-	if lease.Spec.LeaseTransitions == nil || *lease.Spec.LeaseTransitions != seededTransitions+1 {
-		t.Fatalf("transitions after hand-over = %d, want %d", *lease.Spec.LeaseTransitions, seededTransitions+1)
+	// A nil LeaseTransitions reports as -1, so the failure message never
+	// dereferences the field.
+	transitions := int32(-1)
+	if lease.Spec.LeaseTransitions != nil {
+		transitions = *lease.Spec.LeaseTransitions
+	}
+	if transitions != seededTransitions+1 {
+		t.Fatalf("transitions after hand-over = %d, want %d", transitions, seededTransitions+1)
 	}
 }
 
