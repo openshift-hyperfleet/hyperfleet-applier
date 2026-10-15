@@ -13,6 +13,41 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 )
 
+// launchReplica starts r under a context derived from the test's, returning
+// the channel Start reports on and the shutdown cancel.
+func launchReplica(t *testing.T, r *Runnable) (<-chan error, context.CancelFunc) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	done := make(chan error, 1)
+	go func() { done <- r.Start(ctx) }()
+	return done, cancel
+}
+
+// startReplica launches r and waits for its controller to start.
+func startReplica(t *testing.T, r *Runnable, started <-chan struct{}) (<-chan error, context.CancelFunc) {
+	t.Helper()
+	done, cancel := launchReplica(t, r)
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("controller never started")
+	}
+	return done, cancel
+}
+
+// awaitStartReturn waits for Start to return and reports its result.
+func awaitStartReturn(t *testing.T, done <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start did not return")
+		return nil
+	}
+}
+
 // TestReleaseLeaseHandsOver covers the hand-over record: a deliberate exit
 // writes an already-expired Lease (empty holder, one-second duration) while
 // this replica is still the recorded holder, and leaves the record alone
@@ -31,26 +66,12 @@ func TestReleaseLeaseHandsOver(t *testing.T) {
 		t.Fatal(err)
 	}
 	fastElection(r)
-
-	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(cancel)
-	done := make(chan error, 1)
-	go func() { done <- r.Start(ctx) }()
-	select {
-	case <-started:
-	case <-time.After(5 * time.Second):
-		t.Fatal("controller never started")
-	}
+	done, cancel := startReplica(t, r, started)
 
 	// Graceful shutdown drains the controller and hands the Lease over.
 	cancel()
-	select {
-	case shutdownErr := <-done:
-		if shutdownErr != nil {
-			t.Fatalf("Start = %v, want nil on graceful shutdown", shutdownErr)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Start did not return after shutdown")
+	if shutdownErr := awaitStartReturn(t, done); shutdownErr != nil {
+		t.Fatalf("Start = %v, want nil on graceful shutdown", shutdownErr)
 	}
 	lease, err := client.CoordinationV1().Leases(testNamespace).Get(
 		t.Context(), LeaseName(partition), metav1.GetOptions{},
@@ -71,17 +92,8 @@ func TestReleaseLeaseHandsOver(t *testing.T) {
 func TestReleaseLeaseSkipsForeignHolder(t *testing.T) {
 	const partition = "foreign-holder-partition"
 	client := fake.NewClientset()
-	r, err := New(client.CoordinationV1(), testNamespace, partition, "replica")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Acquire once so everSucceeded does not short-circuit, then record
-	// another holder, as after a takeover.
-	fastElection(r)
-	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(cancel)
 	started := make(chan struct{})
-	r2, err := New(client.CoordinationV1(), testNamespace, partition, "replica",
+	r, err := New(client.CoordinationV1(), testNamespace, partition, "replica",
 		funcRunnable(func(ctx context.Context) error {
 			close(started)
 			<-ctx.Done()
@@ -90,22 +102,14 @@ func TestReleaseLeaseSkipsForeignHolder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fastElection(r2)
-	done := make(chan error, 1)
-	go func() { done <- r2.Start(ctx) }()
-	select {
-	case <-started:
-	case <-time.After(5 * time.Second):
-		t.Fatal("controller never started")
-	}
+	fastElection(r)
+	// Lead once so everSucceeded stays set, then record another holder, as
+	// after a takeover: the hand-over must read the foreign record and
+	// leave it alone.
+	done, cancel := startReplica(t, r, started)
 	cancel()
-	select {
-	case shutdownErr := <-done:
-		if shutdownErr != nil {
-			t.Fatalf("Start = %v, want nil", shutdownErr)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Start did not return")
+	if shutdownErr := awaitStartReturn(t, done); shutdownErr != nil {
+		t.Fatalf("Start = %v, want nil", shutdownErr)
 	}
 
 	lease, err := client.CoordinationV1().Leases(testNamespace).Get(
@@ -160,28 +164,14 @@ func TestReleaseLeaseReadFailureKeepsCleanExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	fastElection(r)
-
-	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(cancel)
-	done := make(chan error, 1)
-	go func() { done <- r.Start(ctx) }()
-	select {
-	case <-started:
-	case <-time.After(5 * time.Second):
-		t.Fatal("controller never started")
-	}
+	done, cancel := startReplica(t, r, started)
 
 	// The Lease API fails from here on: the hand-over cannot read the
 	// record, so the successor must fall back to the expiry.
 	failLease.Store(true)
 	cancel()
-	select {
-	case shutdownErr := <-done:
-		if shutdownErr != nil {
-			t.Fatalf("Start = %v, want nil despite the hand-over read failure", shutdownErr)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Start did not return after shutdown")
+	if shutdownErr := awaitStartReturn(t, done); shutdownErr != nil {
+		t.Fatalf("Start = %v, want nil despite the hand-over read failure", shutdownErr)
 	}
 
 	failLease.Store(false)
@@ -213,28 +203,14 @@ func TestReleaseLeaseUpdateFailureKeepsCleanExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	fastElection(r)
-
-	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(cancel)
-	done := make(chan error, 1)
-	go func() { done <- r.Start(ctx) }()
-	select {
-	case <-started:
-	case <-time.After(5 * time.Second):
-		t.Fatal("controller never started")
-	}
+	done, cancel := startReplica(t, r, started)
 
 	// Lease reads keep working; only the record update fails, so the
 	// hand-over reaches its write and loses it.
 	failUpdate.Store(true)
 	cancel()
-	select {
-	case shutdownErr := <-done:
-		if shutdownErr != nil {
-			t.Fatalf("Start = %v, want nil despite the hand-over update failure", shutdownErr)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Start did not return after shutdown")
+	if shutdownErr := awaitStartReturn(t, done); shutdownErr != nil {
+		t.Fatalf("Start = %v, want nil despite the hand-over update failure", shutdownErr)
 	}
 
 	assertNoHandOver(t, client, partition, "replica")
@@ -275,16 +251,10 @@ func TestControllerFailureHandsOverLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	fastElection(r)
+	done, _ := launchReplica(t, r)
 
-	done := make(chan error, 1)
-	go func() { done <- r.Start(t.Context()) }()
-	select {
-	case startErr := <-done:
-		if !errors.Is(startErr, want) {
-			t.Fatalf("Start = %v, want %v", startErr, want)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Start did not stop")
+	if startErr := awaitStartReturn(t, done); !errors.Is(startErr, want) {
+		t.Fatalf("Start = %v, want %v", startErr, want)
 	}
 
 	lease, err := client.CoordinationV1().Leases(testNamespace).Get(
@@ -339,30 +309,17 @@ func TestCleanShutdownHandsOverLeaseQuickly(t *testing.T) {
 	b.config.RenewDeadline = 3 * time.Second
 	b.config.RetryPeriod = 100 * time.Millisecond
 
-	aCtx, aCancel := context.WithCancel(t.Context())
-	t.Cleanup(aCancel)
-	aDone := make(chan error, 1)
-	go func() { aDone <- a.Start(aCtx) }()
-	select {
-	case <-aStarted:
-	case <-time.After(5 * time.Second):
-		t.Fatal("replica A never led")
-	}
+	aDone, aCancel := startReplica(t, a, aStarted)
 
-	bCtx, bCancel := context.WithCancel(t.Context())
-	t.Cleanup(bCancel)
-	bDone := make(chan error, 1)
-	go func() { bDone <- b.Start(bCtx) }()
+	// B waits on standby; its two-second takeover budget below is the
+	// regression assertion, so it keeps a custom wait instead of the
+	// generic startReplica one.
+	bDone, bCancel := launchReplica(t, b)
 
 	// Graceful shutdown of the leader (SIGTERM equivalent).
 	aCancel()
-	select {
-	case err := <-aDone:
-		if err != nil {
-			t.Fatalf("A Start = %v, want nil on graceful shutdown", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("A did not shut down")
+	if err := awaitStartReturn(t, aDone); err != nil {
+		t.Fatalf("A Start = %v, want nil on graceful shutdown", err)
 	}
 
 	// B must lead within a couple of retry periods of the hand-over.
@@ -373,12 +330,7 @@ func TestCleanShutdownHandsOverLeaseQuickly(t *testing.T) {
 		t.Fatal("successor did not take over quickly after a clean shutdown")
 	}
 	bCancel()
-	select {
-	case err := <-bDone:
-		if err != nil {
-			t.Fatalf("B Start = %v, want nil", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("B did not shut down")
+	if err := awaitStartReturn(t, bDone); err != nil {
+		t.Fatalf("B Start = %v, want nil", err)
 	}
 }
