@@ -25,13 +25,15 @@ The Lease duration is 120 seconds, renewal deadline 60 seconds, and retry period
 10 seconds. The 60-second gap exceeds the existing 30-second SSA and DELETE
 timeouts. On renewal failure, the leader cancels its controllers, waits for
 them to stop, and exits. A deliberate exit - graceful shutdown or a controller
-failure - hands the Lease over after the controllers drain, so a restart or
-rolling update takes over within about one retry period instead of waiting
-out the expiry. Crashes, freezes, and kills never run that hand-over, so for
-ungraceful deaths the takeover still waits for the 120-second expiry plus an
-acquisition retry. Failure detection and scheduling can add delay; 120 seconds
-is not a strict end-to-end failover bound. A new leader starts reconciliation
-immediately.
+failure - attempts the hand-over after the controllers drain, so a restart or
+rolling update normally takes over within about one retry period instead of
+waiting out the expiry. The attempt is best-effort: when its Lease read or
+update fails, the record keeps the previous holder and duration, and the
+successor waits for the 120-second expiry plus an acquisition retry. Crashes,
+freezes, and kills never run the hand-over at all, so an ungraceful death
+waits out the same expiry. Failure detection and scheduling can add delay;
+120 seconds is not a strict end-to-end failover bound. A new leader starts
+reconciliation immediately.
 
 Lease election is not fencing against arbitrary process pauses: cancellation
 prevents subsequent writes but cannot undo a request already accepted by the
