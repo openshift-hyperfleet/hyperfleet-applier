@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	coordinationv1 "k8s.io/api/coordination/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
@@ -49,12 +50,31 @@ func awaitStartReturn(t *testing.T, done <-chan error) error {
 }
 
 // TestReleaseLeaseHandsOver covers the hand-over record: a deliberate exit
-// writes an already-expired Lease (empty holder, one-second duration) while
-// this replica is still the recorded holder, and leaves the record alone
-// when it is not.
+// writes an already-expired Lease (empty holder, one-second duration, the
+// recorded transition count carried over) while this replica is still the
+// recorded holder, and leaves the record alone when it is not.
 func TestReleaseLeaseHandsOver(t *testing.T) {
 	const partition = "handover-partition"
 	client := fake.NewClientset()
+	// A pre-existing expired record from another holder with a transition
+	// count: client-go bumps the count when a different identity acquires,
+	// and the hand-over must carry the bumped value over instead of
+	// resetting it.
+	seededTransitions := int32(5)
+	oneSecond := int32(1)
+	expired := metav1.NewMicroTime(time.Now().Add(-10 * time.Second))
+	if _, err := client.CoordinationV1().Leases(testNamespace).Create(t.Context(), &coordinationv1.Lease{
+		ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace, Name: LeaseName(partition)},
+		Spec: coordinationv1.LeaseSpec{
+			HolderIdentity:       ptr("previous-holder"),
+			LeaseDurationSeconds: &oneSecond,
+			LeaseTransitions:     &seededTransitions,
+			RenewTime:            &expired,
+			AcquireTime:          &expired,
+		},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
 	started := make(chan struct{})
 	r, err := New(client.CoordinationV1(), testNamespace, partition, "replica",
 		funcRunnable(func(ctx context.Context) error {
@@ -84,6 +104,9 @@ func TestReleaseLeaseHandsOver(t *testing.T) {
 	}
 	if lease.Spec.LeaseDurationSeconds == nil || *lease.Spec.LeaseDurationSeconds != handOverLeaseDurationSeconds {
 		t.Fatalf("duration after hand-over = %v, want %d", lease.Spec.LeaseDurationSeconds, handOverLeaseDurationSeconds)
+	}
+	if lease.Spec.LeaseTransitions == nil || *lease.Spec.LeaseTransitions != seededTransitions+1 {
+		t.Fatalf("transitions after hand-over = %d, want %d", *lease.Spec.LeaseTransitions, seededTransitions+1)
 	}
 }
 
