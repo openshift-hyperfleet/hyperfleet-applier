@@ -1,6 +1,6 @@
 # internal/controllers/readdesire
 
-`Controller` mirrors live Kubernetes object state (see `pkg/desire/CLAUDE.md`) back into
+`Controller` mirrors live Kubernetes object state (see `pkg/desire/AGENTS.md`) back into
 `ReadDesire` status, for one management-cluster partition.
 
 ## Shape: one informer per `ReadDesire`, not per resource type
@@ -164,7 +164,7 @@ that shared path, because GVR resolution and per-object observation happen in di
    `UpdateReadDesireStatus` is still a real Redis `WATCH`/`MULTI`/`EXEC` write - an unconditional
    write on every 60s resync tick would still generate needless Redis load and replication traffic
    for objects that haven't actually changed, so the no-op check earns its keep on that basis.
-4. `UpdateReadDesireStatus(ctx, id, newStatus)` - per `pkg/desire/CLAUDE.md`, each desire type is
+4. `UpdateReadDesireStatus(ctx, id, newStatus)` - per `pkg/desire/AGENTS.md`, each desire type is
    its own independent record with its own `Version` now, so a Read status write has no
    cross-desire-type CAS concern to get wrong the way it would if Apply/Delete/Read still shared one
    physical record's version.

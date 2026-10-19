@@ -1,7 +1,7 @@
 # pkg/desire/store
 
 Backend implementations of the `desire.SpecStore` / `desire.StatusStore` contracts defined in
-`pkg/desire` (see `pkg/desire/CLAUDE.md`).
+`pkg/desire` (see `pkg/desire/AGENTS.md`).
 
 - **memory** — single-process, mutex-guarded map; used in unit tests and envtest.
 - **redis** — one JSON `resourceRecord` per desire, updated with WATCH/MULTI/EXEC CAS. `Create*`

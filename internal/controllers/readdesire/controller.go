@@ -51,7 +51,7 @@ type specLister interface {
 // current Status (to suppress a no-op write and as the LastTransitionTime
 // baseline), and UpdateReadDesireStatus to persist the mirrored result.
 // UpdateReadDesireStatus never checks or advances the desire's Version: per
-// pkg/desire/CLAUDE.md, each desire type is its own independent record now,
+// pkg/desire/AGENTS.md, each desire type is its own independent record now,
 // so there's no shared-resource CAS concern for a Read status write to get
 // wrong the way there would be for Apply/Delete.
 type statusStore interface {

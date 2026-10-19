@@ -1,7 +1,7 @@
 # pkg/desire
 
 Desire types, identity/validation rules, and the SpecStore/StatusStore contracts. Backends
-implementing these contracts live in `pkg/desire/store/` (see `pkg/desire/store/CLAUDE.md`).
+implementing these contracts live in `pkg/desire/store/` (see `pkg/desire/store/AGENTS.md`).
 
 ## Desire model
 

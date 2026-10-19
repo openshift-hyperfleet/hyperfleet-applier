@@ -24,21 +24,21 @@ obvious from that listing:
 ## Architecture
 
 - `pkg/desire` — desire types, identity/validation, and the SpecStore/StatusStore contracts. See
-  `pkg/desire/CLAUDE.md`.
+  `pkg/desire/AGENTS.md`.
 - `pkg/desire/store/{memory,redis,conformance}` — store backends and their shared test suite. See
-  `pkg/desire/store/CLAUDE.md`.
+  `pkg/desire/store/AGENTS.md`.
 - `internal/reconciler` — `Runnable` and `Reconcilable`, the two lifecycles the applier starts. See
-  `internal/reconciler/CLAUDE.md`.
+  `internal/reconciler/AGENTS.md`.
 - `internal/controllers/{applydesire,deletedesire,readdesire,serial,util}` — the reconcile controllers and
   their shared support code (not part of the public library surface):
-  - `applydesire` — one SSA pass over ApplyDesires. See `internal/controllers/applydesire/CLAUDE.md`.
+  - `applydesire` — one SSA pass over ApplyDesires. See `internal/controllers/applydesire/AGENTS.md`.
   - `deletedesire` — one pass that confirms a Kubernetes resource is gone (past finalizers) for
-    DeleteDesires. See `internal/controllers/deletedesire/CLAUDE.md`.
+    DeleteDesires. See `internal/controllers/deletedesire/AGENTS.md`.
   - `serial` — `Runnable`, which calls `RunOnce` on each `reconciler.Reconcilable` in order.
     The applier passes apply, then delete. Read stays a separate `Runnable`.
     Both run only on the management-cluster Lease leader (`internal/leadership`);
     discovery refresh runs on every replica.
   - `readdesire` — the informer-driven `Controller` that mirrors live Kubernetes object state back
-    into ReadDesire status. See `internal/controllers/readdesire/CLAUDE.md`.
+    into ReadDesire status. See `internal/controllers/readdesire/AGENTS.md`.
   - `util` — shared helpers (`WithCondition`, `Equal`, `DescribeIdentity`) reused across the
     reconcile controllers.

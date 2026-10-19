@@ -1,6 +1,6 @@
 # internal/controllers/deletedesire
 
-`DeleteReconciler` reconciles DeleteDesires (see `pkg/desire/CLAUDE.md`) against the local kube-apiserver
+`DeleteReconciler` reconciles DeleteDesires (see `pkg/desire/AGENTS.md`) against the local kube-apiserver
 via the DELETE API and confirmation checks.
 
 `DeleteReconciler` is bound to one management-cluster partition. `RunOnce` is one pass: it lists

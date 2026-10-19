@@ -1,6 +1,6 @@
 # internal/controller/applydesire
 
-`ApplyReconciler` reconciles ApplyDesires (see `pkg/desire/CLAUDE.md`) against the local kube-apiserver via server-side apply.
+`ApplyReconciler` reconciles ApplyDesires (see `pkg/desire/AGENTS.md`) against the local kube-apiserver via server-side apply.
 
 `RunOnce` is one pass over every ApplyDesire. It implements `reconciler.Reconcilable` and does not own a poll loop.
 `serial.Runnable` calls it, then `DeleteReconciler.RunOnce`, on one shared cadence.
