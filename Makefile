@@ -127,7 +127,7 @@ tools: ## Ensure tool dependencies are up to date
 verify-tools: tools ## Fail in CI if tool module drifted
 	@git diff --exit-code HEAD -- tools/go.mod tools/go.sum || (echo "tool modules out of date; run 'make tools'" && exit 1)
 
-.PHONY: download 
+.PHONY: download
 
 download: ## Download dependencies
 	$(GO) mod download
