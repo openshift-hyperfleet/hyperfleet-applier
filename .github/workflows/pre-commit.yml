@@ -48,9 +48,6 @@ jobs:
       - name: Install pre-commit
         run: python -m pip install "pre-commit==${PRE_COMMIT_VERSION}"
 
-      - name: Install Git hooks
-        run: make install-hooks
-
       # This runs pre-commit-stage hooks; PR-title validation stays in Prow.
       - name: Run pre-commit hooks
         run: pre-commit run --all-files --show-diff-on-failure
