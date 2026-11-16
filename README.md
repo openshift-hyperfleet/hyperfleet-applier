@@ -92,15 +92,9 @@ go get github.com/openshift-hyperfleet/hyperfleet-applier
 Credentials are stored scoped to the applier's own partition by convention.
 Cryptographic enforcement of that scoping arrives with the production backends.
 
-### FIPS Compliance:
+### FIPS compliance
 
-As part of https://redhat.atlassian.net/browse/HYPERFLEET-1601 - decided to defer FIPS compliant images until compliance requirement comes in.
-If want to build a FIPS compliant applier image -- add these Go variables to the `Dockerfile` and Makefile
-```bash
-CGO_ENABLED=1 and GOEXPERIMENT=strictfipsruntime go ...
-```
-
-Reference on this: https://developers.redhat.com/articles/2025/01/23/fips-mode-red-hat-go-toolset
+The production image builds with Go's native FIPS 140-3 module (`GOFIPS140=v1.0.0`), which enables FIPS mode by default. `GOEXPERIMENT=noboringcrypto` explicitly disables the incompatible legacy BoringCrypto experiment, including when it was saved with `go env -w`. The Dockerfile checks the selected module with `go version -m`. See [Go's FIPS 140-3 documentation](https://go.dev/doc/security/fips140) and [HYPERFLEET-1940](https://redhat.atlassian.net/browse/HYPERFLEET-1940).
 
 ## RBAC allowlist
 
