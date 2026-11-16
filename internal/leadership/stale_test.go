@@ -176,7 +176,7 @@ func TestStaleLeadershipBlocksWritesInsideRenewDeadline(t *testing.T) {
 	}
 
 	client := fake.NewClientset()
-	loop := serial.New(50*time.Millisecond,
+	loop := serial.New(time.Hour,
 		applydesire.New(store, store, dyn, mapper, partition),
 		deletedesire.New(store, store, dyn, mapper, partition))
 	r, err := New(client.CoordinationV1(), testNamespace, partition, "replica", loop)
@@ -195,11 +195,14 @@ func TestStaleLeadershipBlocksWritesInsideRenewDeadline(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- r.Start(ctx) }()
 
-	// Wait until the leader is actively reconciling (renewed and writing).
+	// Wait for both reconcilers in the initial pass to finish their API writes.
+	// A long loop interval prevents another pass from starting while the test
+	// simulates the stale leader, so only writes issued before the simulated
+	// stall are present in the baseline.
 	deadline := time.Now().Add(5 * time.Second)
-	for writes.Load() == 0 {
+	for writes.Load() < 2 {
 		if time.Now().After(deadline) {
-			t.Fatal("leader never issued a write")
+			t.Fatalf("initial reconciliation issued %d writes, want both apply and delete writes", writes.Load())
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
