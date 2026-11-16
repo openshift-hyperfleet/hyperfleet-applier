@@ -2,6 +2,8 @@ module github.com/openshift-hyperfleet/hyperfleet-applier
 
 go 1.26.0
 
+godebug fips140=on
+
 require (
 	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/go-logr/logr v1.4.3
