@@ -94,7 +94,9 @@ Cryptographic enforcement of that scoping arrives with the production backends.
 
 ### FIPS compliance
 
-The production image builds with Go's native FIPS 140-3 module (`GOFIPS140=v1.0.0`), which enables FIPS mode by default. `GOEXPERIMENT=noboringcrypto` explicitly disables the incompatible legacy BoringCrypto experiment, including when it was saved with `go env -w`. The Dockerfile checks the selected module with `go version -m`. See [Go's FIPS 140-3 documentation](https://go.dev/doc/security/fips140) and [HYPERFLEET-1940](https://redhat.atlassian.net/browse/HYPERFLEET-1940).
+The production image builds with Go's native FIPS 140-3 module (`GOFIPS140=v1.0.0`), which enables FIPS mode by default. `GOEXPERIMENT=noboringcrypto` keeps builds compatible with toolchains where the legacy BoringCrypto experiment was saved with `go env -w`; without the negation, Go rejects the incompatible combination rather than silently falling back to non-FIPS cryptography. The Dockerfile checks the selected module with `go version -m`. See [Go's FIPS 140-3 documentation](https://go.dev/doc/security/fips140) and [HYPERFLEET-1940](https://redhat.atlassian.net/browse/HYPERFLEET-1940).
+
+FIPS production deployments must not set `GODEBUG=fips140=off`, including within a comma-separated value. This override disables FIPS without changing the binary's build info. Deployment review must check runtime overrides; the image check does not enforce the runtime mode, and this requirement does not add a startup rejection.
 
 ## RBAC allowlist
 
