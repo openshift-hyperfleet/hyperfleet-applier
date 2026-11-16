@@ -523,18 +523,24 @@ func RunSpecStoreSuite(t *testing.T, newStore func(t *testing.T) desire.SpecStor
 			if err != nil {
 				t.Fatalf("CreateApplyDesire: %v", err)
 			}
-			err = store.DeleteApplyDesire(ctx, id, ownerA, created.Version+1)
+			updated, err := store.UpdateApplyDesireSpec(
+				ctx, id, desire.ApplySpec{KubeContent: json.RawMessage(kubeContentV2)}, ownerA, created.Version,
+			)
+			if err != nil {
+				t.Fatalf("UpdateApplyDesireSpec: %v", err)
+			}
+			err = store.DeleteApplyDesire(ctx, id, ownerA, created.Version)
 			if !errors.Is(err, desire.ErrVersionConflict) {
-				t.Fatalf("expected ErrVersionConflict for stale version, got %v", err)
+				t.Fatalf("expected ErrVersionConflict for stale version %d, got %v", created.Version, err)
 			}
 			got, err := store.GetApplyDesire(ctx, id)
 			if err != nil {
 				t.Fatalf("GetApplyDesire after stale-version delete: %v", err)
 			}
-			if got.Version != created.Version {
-				t.Errorf("expected Version == %d to survive a stale-version delete, got %d", created.Version, got.Version)
+			if got.Version != updated.Version {
+				t.Errorf("expected Version == %d to survive a stale-version delete, got %d", updated.Version, got.Version)
 			}
-			if string(got.Spec.KubeContent) != kubeContentV1 {
+			if string(got.Spec.KubeContent) != kubeContentV2 {
 				t.Errorf("stale-version delete changed KubeContent: got %q", got.Spec.KubeContent)
 			}
 		})
