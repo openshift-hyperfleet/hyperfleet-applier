@@ -22,6 +22,13 @@ CGO_ENABLED ?= 1
 # when an older toolchain has persisted that experiment via "go env -w".
 GOEXPERIMENT ?= noboringcrypto
 GOFIPS140 ?= v1.0.0
+ifeq ($(strip $(GOEXPERIMENT)),)
+override GOEXPERIMENT := noboringcrypto
+endif
+ifeq ($(strip $(GOFIPS140)),)
+override GOFIPS140 := v1.0.0
+endif
+export CGO_ENABLED GOEXPERIMENT GOFIPS140
 
 CONFIG ?= configs/applier.yaml
 KUBE_CONFIG_PATH ?= $(if $(KUBECONFIG),$(KUBECONFIG),$(HOME)/.kube/config)
@@ -58,7 +65,7 @@ CGO_ENABLED ?= 1
 
 .PHONY: build
 build: ## Build the applier binary
-	CGO_ENABLED=$(CGO_ENABLED) GOEXPERIMENT=$(GOEXPERIMENT) GOFIPS140=$(GOFIPS140) $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY_PATH) ./cmd
+	$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY_PATH) ./cmd
 
 .PHONY: run
 run: build ## Run the applier service
@@ -68,7 +75,7 @@ run: build ## Run the applier service
 
 .PHONY: test
 test: ## Run unit tests
-	CGO_ENABLED=$(CGO_ENABLED) GOEXPERIMENT=$(GOEXPERIMENT) GOFIPS140=$(GOFIPS140) $(GO) test -v -race -coverprofile=coverage.out ./...
+	$(GO) test -v -race -coverprofile=coverage.out ./...
 
 # Removal of -i to the setup-envtest command is intentional
 # If we run this envtest in CI, we want to load them from the $(PWD)/bin since we don't have access to the home directory.
@@ -79,7 +86,7 @@ setup-envtest: $(LOCALBIN) ## Download the envtest binaries (etcd, kube-apiserve
 
 .PHONY: test-envtest
 test-envtest: fmt vet setup-envtest ## Run envtest-backed integration tests against a real kube-apiserver
-	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use '$(ENVTEST_K8S_VERSION)' --bin-dir $(LOCALBIN) -p path)" CGO_ENABLED=$(CGO_ENABLED) GOEXPERIMENT=$(GOEXPERIMENT) GOFIPS140=$(GOFIPS140) $(GO) test -race -tags envtest ./... -run Envtest -v
+	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use '$(ENVTEST_K8S_VERSION)' --bin-dir $(LOCALBIN) -p path)" $(GO) test -race -tags envtest ./... -run Envtest -v
 
 .PHONY: fmt
 fmt: ## Format Go code
