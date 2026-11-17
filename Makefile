@@ -17,9 +17,14 @@ LDFLAGS := -s -w \
 	-X main.commit=$(GIT_SHA) \
 	-X main.date=$(BUILD_DATE)
 
+# Keep CGO enabled for the supported production image. GOFIPS140 selects
+# Go's native, validated FIPS 140-3 module; the godebug fips140=on directive
+# in go.mod enables FIPS mode by default, because the Red Hat Go toolset does
+# not enable it merely by selecting the module. Go rejects an active
+# BoringCrypto experiment when GOFIPS140 is set, so noboringcrypto is not a
+# guard: it keeps builds working where the legacy experiment was persisted
+# with "go env -w".
 CGO_ENABLED ?= 1
-# Select Go's validated native FIPS module; do not fall back to BoringCrypto
-# when an older toolchain has persisted that experiment via "go env -w".
 GOEXPERIMENT ?= noboringcrypto
 GOFIPS140 ?= v1.0.0
 ifeq ($(strip $(GOEXPERIMENT)),)
