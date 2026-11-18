@@ -190,12 +190,16 @@ TMPCONFIG=$(mktemp -t helm-config-XXXXXX).yaml
 TMPFILES+=("$TMPCONFIG")
 echo "$CONFIG_YAML" > "$TMPCONFIG"
 
-if ! go run ./cmd config-dump --config "$TMPCONFIG" > /dev/null 2>&1; then
-  fail "rendered config.yaml failed Go validation: $(go run ./cmd config-dump --config "$TMPCONFIG" 2>&1)"
+APPLIER_BIN=$(mktemp -t helm-applier-XXXXXX)
+TMPFILES+=("$APPLIER_BIN")
+make build BINARY_PATH="$APPLIER_BIN"
+
+if ! "$APPLIER_BIN" config-dump --config "$TMPCONFIG" > /dev/null 2>&1; then
+  fail "rendered config.yaml failed Go validation: $("$APPLIER_BIN" config-dump --config "$TMPCONFIG" 2>&1)"
 fi
 
-if ! go run ./cmd config-dump --config "$OVERRIDE_FILE" > /dev/null 2>&1; then
-  fail "rendered config.yaml failed Go validation: $(go run ./cmd config-dump --config "$TMPCONFIG" 2>&1)"
+if ! "$APPLIER_BIN" config-dump --config "$OVERRIDE_FILE" > /dev/null 2>&1; then
+  fail "rendered config.yaml failed Go validation: $("$APPLIER_BIN" config-dump --config "$OVERRIDE_FILE" 2>&1)"
 fi
 
 pass "Rendered config.yaml passes Go validation"

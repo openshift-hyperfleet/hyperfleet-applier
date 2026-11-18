@@ -108,8 +108,18 @@ including `no_openssl` in `GOFLAGS` and `GO_TEST_TAGS` when changing tags.
 Empty overrides are not normalized.
 The Dockerfile checks the exact `no_openssl` token.
 Make enforces `GOWORK=off` to honor `go.mod`'s FIPS default.
-Direct Go commands need `GOWORK=off` too unless the workspace declares
-`godebug fips140=on`.
+Prefer Make; direct Go commands do not inherit its defaults. Configure the same
+settings and include the native backend tag explicitly:
+
+```bash
+export CGO_ENABLED=1 GOEXPERIMENT=noboringcrypto GOFIPS140=v1.0.0 GOWORK=off
+go build -trimpath -tags=no_openssl ./...
+go test -tags=no_openssl ./...
+```
+
+Do not set `fips140ems=0` through `GODEBUG`, `godebug` in `go.mod`/`go.work`,
+or `//go:debug` in the main package: it disables TLS 1.2 EMS enforcement.
+The Dockerfile rejects this compiled override even alongside `fips140=on`.
 
 FIPS production deployments must not disable that compiled default via `GODEBUG=fips140=off` or `GODEBUG=fips140=` (including within comma-separated values), a `godebug` directive in `go.work`, or a `//go:debug` directive in the main package. The Dockerfile checks the compiled default, not runtime overrides; an entirely empty or unset `GODEBUG` preserves the compiled default.
 

@@ -17,6 +17,7 @@ APP_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 
 GOFLAGS ?= -trimpath -tags=no_openssl
 # Keep the backend tag in tests without exporting production-only -trimpath.
 GO_TEST_TAGS ?= no_openssl
+export GO_TEST_TAGS
 LDFLAGS := -s -w \
 	-X main.version=$(APP_VERSION) \
 	-X main.commit=$(GIT_SHA) \
@@ -72,7 +73,7 @@ run: build ## Run the applier service
 
 .PHONY: test
 test: ## Run unit tests
-	$(GO) test -tags="$(GO_TEST_TAGS)" -v -race -coverprofile=coverage.out ./...
+	$(GO) test -tags="$${GO_TEST_TAGS}" -v -race -coverprofile=coverage.out ./...
 
 # Removal of -i to the setup-envtest command is intentional
 # If we run this envtest in CI, we want to load them from the $(PWD)/bin since we don't have access to the home directory.
@@ -83,7 +84,8 @@ setup-envtest: $(LOCALBIN) ## Download the envtest binaries (etcd, kube-apiserve
 
 .PHONY: test-envtest
 test-envtest: fmt vet setup-envtest ## Run envtest-backed integration tests against a real kube-apiserver
-	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use '$(ENVTEST_K8S_VERSION)' --bin-dir $(LOCALBIN) -p path)" $(GO) test -race -tags="envtest,$(GO_TEST_TAGS)" ./... -run Envtest -v
+	@test_tags=$$(printf '%s' "$${GO_TEST_TAGS}" | tr '[:space:]' ','); \
+	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use '$(ENVTEST_K8S_VERSION)' --bin-dir $(LOCALBIN) -p path)" $(GO) test -race -tags="envtest,$$test_tags" ./... -run Envtest -v
 
 .PHONY: fmt
 fmt: ## Format Go code
