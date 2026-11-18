@@ -1,9 +1,6 @@
 .DEFAULT_GOAL := help
 
 GO ?= go
-# Honor this module's godebug directive, not an enclosing workspace's defaults.
-override GOWORK := off
-export GOWORK
 GOFMT ?= gofmt
 
 ENVTEST_K8S_VERSION ?= 1.36.2
@@ -14,21 +11,15 @@ BUILD_DATE ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 GIT_SHA ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 APP_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "0.0.0-dev")
 
-GOFLAGS ?= -trimpath -tags=no_openssl
-# Keep the backend tag in tests without exporting production-only -trimpath.
-GO_TEST_TAGS ?= no_openssl
-export GO_TEST_TAGS
+GOFLAGS ?= -trimpath
 LDFLAGS := -s -w \
 	-X main.version=$(APP_VERSION) \
 	-X main.commit=$(GIT_SHA) \
 	-X main.date=$(BUILD_DATE)
 
-# Use native FIPS even when boringcrypto was persisted with go env -w.
-# go.mod's godebug fips140=on enables FIPS mode on Red Hat Go too.
+# FIPS mode is turned on only in the container image build. See the Dockerfile.
 CGO_ENABLED ?= 1
-GOEXPERIMENT ?= noboringcrypto
-GOFIPS140 ?= v1.0.0
-export CGO_ENABLED GOEXPERIMENT GOFIPS140
+export CGO_ENABLED
 
 CONFIG ?= configs/applier.yaml
 KUBE_CONFIG_PATH ?= $(if $(KUBECONFIG),$(KUBECONFIG),$(HOME)/.kube/config)
@@ -73,7 +64,7 @@ run: build ## Run the applier service
 
 .PHONY: test
 test: ## Run unit tests
-	$(GO) test -tags="$${GO_TEST_TAGS}" -v -race -coverprofile=coverage.out ./...
+	$(GO) test -v -race -coverprofile=coverage.out ./...
 
 # Removal of -i to the setup-envtest command is intentional
 # If we run this envtest in CI, we want to load them from the $(PWD)/bin since we don't have access to the home directory.
@@ -84,8 +75,7 @@ setup-envtest: $(LOCALBIN) ## Download the envtest binaries (etcd, kube-apiserve
 
 .PHONY: test-envtest
 test-envtest: fmt vet setup-envtest ## Run envtest-backed integration tests against a real kube-apiserver
-	@test_tags=$$(printf '%s' "$${GO_TEST_TAGS}" | tr '[:space:]' ','); \
-	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use '$(ENVTEST_K8S_VERSION)' --bin-dir $(LOCALBIN) -p path)" $(GO) test -race -tags="envtest,$$test_tags" ./... -run Envtest -v
+	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use '$(ENVTEST_K8S_VERSION)' --bin-dir $(LOCALBIN) -p path)" $(GO) test -race -tags=envtest ./... -run Envtest -v
 
 .PHONY: fmt
 fmt: ## Format Go code

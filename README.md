@@ -94,35 +94,15 @@ Cryptographic enforcement of that scoping arrives with the production backends.
 
 ### FIPS compliance
 
-The production image builds with Go's native FIPS 140-3 module (`GOFIPS140=v1.0.0`). The `godebug fips140=on` directive in `go.mod` enables FIPS mode by default, including on the Red Hat Go toolset (which does not enable it merely by selecting the module). `GOEXPERIMENT=noboringcrypto` keeps builds compatible with toolchains where the legacy experiment was saved with `go env -w`. The Dockerfile checks both the selected module and `DefaultGODEBUG=fips140=on`. See [Go's FIPS 140-3 documentation](https://go.dev/doc/security/fips140) and [HYPERFLEET-1940](https://redhat.atlassian.net/browse/HYPERFLEET-1940).
-
-Red Hat Go toolsets use an OpenSSL backend by default on Linux with cgo.
-That backend aborts on FIPS-enabled hosts when `fips140` GODEBUG is set.
-Make defaults to `no_openssl` for builds and tests on every Go toolchain;
-the tag is harmless on upstream Go, so no vendor detection is needed.
-Tests receive tags separately, without production-only `-trimpath`, and combine
-them with `envtest` where needed.
-Make exports CGO and FIPS settings once for all recipes and tools.
-Overrides replace the defaults; callers own the complete replacement,
-including `no_openssl` in `GOFLAGS` and `GO_TEST_TAGS` when changing tags.
-Empty overrides are not normalized.
-The Dockerfile checks the exact `no_openssl` token.
-Make enforces `GOWORK=off` to honor `go.mod`'s FIPS default.
-Prefer Make; direct Go commands do not inherit its defaults. Configure the same
-settings and include the native backend tag explicitly:
-
-```bash
-export CGO_ENABLED=1 GOEXPERIMENT=noboringcrypto GOFIPS140=v1.0.0 GOWORK=off
-# Compile check only; make build produces the service executable.
-go build -trimpath -tags=no_openssl ./...
-go test -tags=no_openssl ./...
-```
-
-Do not set `fips140ems=0` through `GODEBUG`, `godebug` in `go.mod`/`go.work`,
-or `//go:debug` in the main package: it disables TLS 1.2 EMS enforcement.
-The Dockerfile rejects this compiled override even alongside `fips140=on`.
-
-FIPS production deployments must not disable that compiled default via `GODEBUG=fips140=off` or `GODEBUG=fips140=` (including within comma-separated values), a `godebug` directive in `go.work`, or a `//go:debug` directive in the main package. The Dockerfile checks the compiled default, not runtime overrides; an entirely empty or unset `GODEBUG` preserves the compiled default.
+FIPS mode is enabled only in the container image build. Local `make build`,
+`make test`, and `make test-envtest` do not enable FIPS by default. The Dockerfile
+selects `GOFIPS140=v1.0.0` and builds with `-tags=fips,no_openssl`. `cmd/fips.go`
+enables FIPS and rejects runtime attempts to disable it; `no_openssl` selects
+Go's native crypto backend on Red Hat Go. The image build checks the selected
+module, compiled FIPS default, and startup with `GOLANG_FIPS=1`. Do not disable
+TLS 1.2 EMS enforcement with `fips140ems=0`; the compiled-default check also
+rejects it. See [Go's FIPS documentation](https://go.dev/doc/security/fips140)
+and [HYPERFLEET-1940](https://redhat.atlassian.net/browse/HYPERFLEET-1940).
 
 ## RBAC allowlist
 
