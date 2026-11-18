@@ -32,7 +32,7 @@ RUN --mount=type=cache,target=/opt/app-root/src/go/pkg/mod,uid=1001 \
 RUN go version -m /build/bin/hyperfleet-applier | grep -q "CGO_ENABLED=1" || { echo "FIPS check FAILED: missing CGO_ENABLED=1"; exit 1; }
 RUN go version -m /build/bin/hyperfleet-applier | grep -Eq 'GOFIPS140=v1[.]0[.]0(-[[:xdigit:]]+)?$' || { echo "FIPS check FAILED: missing GOFIPS140=v1.0.0"; exit 1; }
 RUN go version -m /build/bin/hyperfleet-applier | grep -Eq 'DefaultGODEBUG=([^,]*,)*fips140=on(,|$)' || { echo "FIPS check FAILED: FIPS mode is not enabled by default"; exit 1; }
-RUN go version -m /build/bin/hyperfleet-applier | grep -Eq -- '-tags=[^[:space:]]*no_openssl' || { echo "FIPS check FAILED: OpenSSL crypto backend selected; build with -tags no_openssl"; exit 1; }
+RUN go version -m /build/bin/hyperfleet-applier | grep -Eq -- '(^|[[:space:]])-tags=([^,[:space:]]+,)*no_openssl(,|[[:space:]]|$)' || { echo "FIPS check FAILED: missing exact no_openssl build tag"; exit 1; }
 
 # Runtime stage
 FROM ${BASE_IMAGE}

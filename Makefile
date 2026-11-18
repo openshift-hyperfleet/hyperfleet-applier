@@ -1,6 +1,9 @@
 .DEFAULT_GOAL := help
 
 GO ?= go
+# Honor this module's godebug directive, not an enclosing workspace's defaults.
+override GOWORK := off
+export GOWORK
 GOFMT ?= gofmt
 
 ENVTEST_K8S_VERSION ?= 1.36.2
@@ -11,45 +14,19 @@ BUILD_DATE ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 GIT_SHA ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 APP_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "0.0.0-dev")
 
-GOFLAGS ?= -trimpath
-# Red Hat Go toolsets use the OpenSSL crypto backend by default on linux+cgo.
-# That backend aborts at startup on FIPS-enabled hosts once a fips140 GODEBUG
-# value is set, so those toolchains must build with Go's native backend.
-ifneq (,$(findstring Red Hat,$(shell $(GO) version 2>/dev/null)))
-# A second -tags flag replaces the first, so merge with any caller-supplied list.
-# Repeated -tags options keep the last list, so merge into that one.
-GOFLAGS_CALLER_TAGS := $(patsubst -tags=%,%,$(lastword $(filter -tags=%,$(GOFLAGS))))
-ifeq (,$(GOFLAGS_CALLER_TAGS))
-override GOFLAGS += -tags=no_openssl
-else
-override GOFLAGS := $(filter-out -tags=%,$(GOFLAGS)) -tags=$(GOFLAGS_CALLER_TAGS),no_openssl
-endif
-endif
+GOFLAGS ?= -trimpath -tags=no_openssl
+# Keep the backend tag in tests without exporting production-only -trimpath.
+GO_TEST_TAGS ?= no_openssl
 LDFLAGS := -s -w \
 	-X main.version=$(APP_VERSION) \
 	-X main.commit=$(GIT_SHA) \
 	-X main.date=$(BUILD_DATE)
 
-# Keep CGO enabled for the supported production image. GOFIPS140 selects
-# Go's native, validated FIPS 140-3 module; the godebug fips140=on directive
-# in go.mod enables FIPS mode by default, because the Red Hat Go toolset does
-# not enable it merely by selecting the module. Go rejects an active
-# BoringCrypto experiment when GOFIPS140 is set, so noboringcrypto is not a
-# guard: it keeps builds working where the legacy experiment was persisted
-# with "go env -w".
+# Use native FIPS even when boringcrypto was persisted with go env -w.
+# go.mod's godebug fips140=on enables FIPS mode on Red Hat Go too.
 CGO_ENABLED ?= 1
-# An empty value falls back to a persisted `go env -w CGO_ENABLED`, so pin it.
-ifeq ($(strip $(CGO_ENABLED)),)
-override CGO_ENABLED := 1
-endif
 GOEXPERIMENT ?= noboringcrypto
 GOFIPS140 ?= v1.0.0
-ifeq ($(strip $(GOEXPERIMENT)),)
-override GOEXPERIMENT := noboringcrypto
-endif
-ifeq ($(strip $(GOFIPS140)),)
-override GOFIPS140 := v1.0.0
-endif
 export CGO_ENABLED GOEXPERIMENT GOFIPS140
 
 CONFIG ?= configs/applier.yaml
@@ -95,7 +72,7 @@ run: build ## Run the applier service
 
 .PHONY: test
 test: ## Run unit tests
-	$(GO) test -v -race -coverprofile=coverage.out ./...
+	$(GO) test -tags="$(GO_TEST_TAGS)" -v -race -coverprofile=coverage.out ./...
 
 # Removal of -i to the setup-envtest command is intentional
 # If we run this envtest in CI, we want to load them from the $(PWD)/bin since we don't have access to the home directory.
@@ -106,7 +83,7 @@ setup-envtest: $(LOCALBIN) ## Download the envtest binaries (etcd, kube-apiserve
 
 .PHONY: test-envtest
 test-envtest: fmt vet setup-envtest ## Run envtest-backed integration tests against a real kube-apiserver
-	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use '$(ENVTEST_K8S_VERSION)' --bin-dir $(LOCALBIN) -p path)" $(GO) test -race -tags envtest ./... -run Envtest -v
+	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use '$(ENVTEST_K8S_VERSION)' --bin-dir $(LOCALBIN) -p path)" $(GO) test -race -tags="envtest,$(GO_TEST_TAGS)" ./... -run Envtest -v
 
 .PHONY: fmt
 fmt: ## Format Go code
